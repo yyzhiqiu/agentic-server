@@ -1,3 +1,5 @@
+"""智能体运行记录 ORM 模型。"""
+
 from __future__ import annotations
 
 from sqlalchemy import ForeignKey, JSON, String
@@ -17,6 +19,12 @@ class AgentRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ForeignKey("conversations.id"),
         nullable=True,
         comment="关联会话 ID。",
+    )
+    agent_id: Mapped[str] = mapped_column(
+        String(100),
+        default="chat_agent",
+        nullable=False,
+        comment="执行该次运行的智能体 ID。",
     )
     user_id: Mapped[str | None] = mapped_column(
         ForeignKey("users.id"),

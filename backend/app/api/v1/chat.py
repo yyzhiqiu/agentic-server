@@ -24,7 +24,10 @@ async def chat(
     service: ChatService = Depends(get_chat_service),
     user: CurrentUser = Depends(get_current_user),
 ) -> dict:
-    """为当前用户执行一次非流式聊天请求。"""
+    """为当前用户执行一次非流式聊天请求。
+
+    该接口作为兼容入口保留，默认调用 ``chat_agent``。
+    """
 
     response = await service.chat(payload, user)
     return success_response(response.model_dump())
@@ -36,7 +39,10 @@ async def chat_stream(
     service: ChatService = Depends(get_chat_service),
     user: CurrentUser = Depends(get_current_user),
 ) -> StreamingResponse:
-    """通过 SSE 为当前用户持续返回聊天事件。"""
+    """通过 SSE 为当前用户持续返回聊天事件。
+
+    该接口作为兼容入口保留，默认调用 ``chat_agent``。
+    """
 
     return StreamingResponse(
         service.stream_chat(payload, user),

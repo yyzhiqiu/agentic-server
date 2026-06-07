@@ -72,7 +72,12 @@ async def resume_agent(
 ) -> dict:
     """将当前用户的 Agent 运行记录标记为恢复执行。"""
 
-    data = await service.resume(payload.run_id, payload.input, user.id)
+    data = await service.resume(
+        payload.run_id,
+        payload.input,
+        user.id,
+        agent_id=payload.agent_id,
+    )
     return success_response(data.model_dump())
 
 
@@ -84,5 +89,10 @@ async def interrupt_agent(
 ) -> dict:
     """将当前用户的 Agent 运行记录标记为已中断。"""
 
-    data = await service.interrupt(payload.run_id, payload.reason, user.id)
+    data = await service.interrupt(
+        payload.run_id,
+        payload.reason,
+        user.id,
+        agent_id=payload.agent_id,
+    )
     return success_response(data.model_dump())

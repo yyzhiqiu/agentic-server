@@ -6,6 +6,7 @@
 - `React + TypeScript + Vite` 前端控制台
 - `Docker + Compose + Nginx` 基础部署入口
 - 面向所有 AI 助手和人类协作者的 `skills/` 项目级知识目录
+- 后端采用 `Agent Registry + 多个独立 Graph`，当前内置 `chat_agent` 与 `code_agent`
 
 ## 1. 设计目标
 
@@ -70,8 +71,9 @@ agentic-server/
 │   │   │   └── v1/                                # API v1 版本目录；方便未来增加 v2
 │   │   │       ├── __init__.py                    # 标记 v1 为 Python 包
 │   │   │       ├── health.py                      # 健康检查接口；提供 /health、/ready
-│   │   │       ├── chat.py                        # 聊天接口；提供 /v1/chat、/v1/chat/stream
-│   │   │       ├── agent.py                       # Agent 控制接口；提供运行状态、暂停、恢复、人类干预等能力
+│   │   │       ├── chat.py                        # 默认聊天兼容接口；/v1/chat、/v1/chat/stream 默认映射到 chat_agent
+│   │   │       ├── agents.py                      # 多 Agent 查询与调用接口；提供 /v1/agents/{agent_id}/chat 等入口
+│   │   │       ├── agent.py                       # Agent Run 控制接口；提供运行状态、恢复、中断与详情查询
 │   │   │       ├── conversations.py               # 会话管理接口；创建、查询、删除、归档会话
 │   │   │       └── files.py                       # 文件接口；上传文件、管理 RAG 文档、触发文档处理
 │   │   │
@@ -173,35 +175,42 @@ agentic-server/
 │   │   │   ├── rerank.py                          # Rerank 模型预留；用于检索结果重排序
 │   │   │   └── fallback.py                        # 模型降级策略；主模型失败时切换备用模型或 mock 模式
 │   │   │
-│   │   ├── graph/                                 # LangGraph 编排层；只负责 Agent 状态、节点、路由、图构建
-│   │   │   ├── __init__.py                        # 标记 graph 为 Python 包
-│   │   │   ├── state.py                           # AgentState 定义；声明 messages、user_id、conversation_id、metadata 等状态
-│   │   │   ├── builder.py                         # Graph 构建器；组装 StateGraph、节点、条件边、checkpointer 并 compile
-│   │   │   ├── routing.py                         # 条件路由；判断是否调用工具、是否结束、是否进入人工审核
-│   │   │   ├── checkpoint.py                      # Checkpointer 封装；SqliteSaver、PostgresSaver 等持久化检查点配置
-│   │   │   ├── store.py                           # 长期记忆 Store；跨线程、跨会话的长期记忆存储封装
-│   │   │   ├── nodes/                             # LangGraph 节点目录；每个节点负责一个明确动作
-│   │   │   │   ├── __init__.py                    # 标记 nodes 为 Python 包
-│   │   │   │   ├── agent.py                       # 主 Agent 节点；读取 messages，调用 LLM 生成回复或 tool_calls
-│   │   │   │   ├── retriever.py                   # RAG 检索节点；根据问题检索文档、知识库或向量库
-│   │   │   │   ├── tool_executor.py               # 工具执行节点；执行 tool_calls，可封装 LangGraph ToolNode
-│   │   │   │   ├── summarize.py                   # 总结节点；对长对话进行摘要，压缩上下文
-│   │   │   │   ├── memory.py                      # 记忆节点；读取或写入长期记忆
-│   │   │   │   └── human_review.py                # 人类审核节点；处理中断、审批、人工确认等场景
-│   │   │   ├── tools/                             # Agent 可调用工具集合；供 LLM tool calling 使用
-│   │   │   │   ├── __init__.py                    # 标记 tools 为 Python 包
-│   │   │   │   ├── search.py                      # 搜索工具；Tavily、DuckDuckGo、SerpAPI 等预留
-│   │   │   │   ├── database.py                    # 数据库工具；安全封装查询能力，禁止直接拼接 SQL
-│   │   │   │   ├── calculator.py                  # 计算工具；处理确定性数学计算
-│   │   │   │   ├── browser.py                     # 浏览器工具；网页读取、内容提取等预留
-│   │   │   │   └── file.py                        # 文件工具；读取上传文件、解析文档内容等
-│   │   │   └── prompts/                           # Prompt 管理目录；集中存放系统提示词和节点专用 Prompt
-│   │   │       ├── __init__.py                    # 标记 prompts 为 Python 包
-│   │   │       ├── system.py                      # 系统提示词；定义 Agent 基础行为、边界、安全约束
-│   │   │       ├── chat.py                        # 聊天 Prompt；普通对话 Agent 使用
-│   │   │       ├── rag.py                         # RAG Prompt；检索增强回答使用
-│   │   │       ├── tool_use.py                    # 工具调用 Prompt；约束工具选择和参数生成
-│   │   │       └── human_review.py                # 人类审核 Prompt；解释为什么需要人工确认
+│   │   ├── graph/                                 # LangGraph 多 Agent 编排层；通过 registry 暴露多个独立 Agent graph
+│   │   │   ├── __init__.py                        # graph 包入口；导出 DEFAULT_AGENT_ID 和 registry 构建入口
+│   │   │   ├── default.py                         # 默认 Agent 定义；/v1/chat 兼容映射到 chat_agent
+│   │   │   ├── types.py                           # AgentMetadata、AgentDefinition 等注册表类型
+│   │   │   ├── registry.py                        # Agent Registry 构建器；启动期编译 chat_agent、code_agent
+│   │   │   ├── state.py                           # 默认 AgentState 兼容入口；内部转发到 chat_agent.state
+│   │   │   ├── builder.py                         # 默认 Graph 构建兼容入口；内部转发到 chat_agent.builder
+│   │   │   ├── routing.py                         # 默认路由兼容入口；内部转发到 chat_agent.routing
+│   │   │   ├── checkpoint.py                      # Graph 检查点工厂；统一管理持久化检查点扩展点
+│   │   │   ├── store.py                           # Graph 共享存储工厂；当前提供最小内存存储
+│   │   │   ├── shared/                            # 多 Agent 共享状态、工具与提示词片段
+│   │   │   │   ├── state.py                       # BaseAgentState；所有 Agent 的基础状态定义
+│   │   │   │   ├── tools/                         # 多 Agent 共享工具；search、file、calculator、database
+│   │   │   │   └── prompts/                       # 多 Agent 共享提示词片段；system、safety、format
+│   │   │   ├── chat_agent/                        # 默认通用聊天 Agent；保持单文件 nodes.py 的轻量结构
+│   │   │   │   ├── builder.py                     # build_chat_agent()；构建简单聊天 graph
+│   │   │   │   ├── metadata.py                    # chat_agent 的元信息
+│   │   │   │   ├── state.py                       # ChatAgentState
+│   │   │   │   ├── nodes.py                       # 简单 Agent 的全部节点实现
+│   │   │   │   ├── routing.py                     # chat_agent 条件路由
+│   │   │   │   ├── tools.py                       # chat_agent 专属工具集合
+│   │   │   │   └── prompts.py                     # chat_agent 专属提示词
+│   │   │   └── code_agent/                        # 代码助手 Agent；采用拆分节点的复杂结构
+│   │   │       ├── builder.py                     # build_code_agent()；构建多步骤 graph
+│   │   │       ├── metadata.py                    # code_agent 的元信息
+│   │   │       ├── state.py                       # CodeAgentState
+│   │   │       ├── routing.py                     # code_agent 条件路由
+│   │   │       ├── tools.py                       # code_agent 专属工具集合
+│   │   │       ├── prompts.py                     # code_agent 专属提示词
+│   │   │       └── nodes/                         # 复杂 Agent 节点拆分目录
+│   │   │           ├── planner.py                 # 任务规划节点
+│   │   │           ├── context_loader.py          # 上下文整理节点
+│   │   │           ├── coder.py                   # 编码建议节点
+│   │   │           ├── reviewer.py                # 风险审查节点
+│   │   │           ├── test_planner.py            # 测试规划节点
+│   │   │           └── finalizer.py               # 最终汇总节点
 │   │   │
 │   │   ├── services/                              # 业务服务层；负责编排业务逻辑、事务边界和跨模块协作
 │   │   │   ├── __init__.py                        # 标记 services 为 Python 包
@@ -447,9 +456,12 @@ agentic-server/
 
 - 健康检查：`GET /health`、`GET /ready`
 - 聊天接口：`POST /v1/chat`、`POST /v1/chat/stream`
+- 多 Agent 入口：`GET /v1/agents`、`GET /v1/agents/{agent_id}`、`POST /v1/agents/{agent_id}/chat`、`POST /v1/agents/{agent_id}/chat/stream`
+- 默认兼容关系：`/v1/chat == /v1/agents/chat_agent/chat`，`/v1/chat/stream == /v1/agents/chat_agent/chat/stream`
 - 会话管理：创建、列表、详情、消息列表、删除
 - 文件管理：列表、详情、上传、下载、删除
 - Agent Run：列表、详情、状态、中断、恢复
+- 智能体归属字段：`conversations.agent_id` 与 `agent_runs.agent_id` 已作为正式字段持久化，`metadata.agent_id` 仅保留兼容兜底
 - 基础持久化链路：conversation、message、agent run、tool call、audit log
 - 最小文档索引链路：文本类文件上传后可登记并索引到 `documents`
 

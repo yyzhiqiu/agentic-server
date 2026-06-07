@@ -10,6 +10,7 @@ import { API_ENDPOINTS } from "@/shared/api/endpoints";
 type BackendAgentRunListItem = {
   id: string;
   conversation_id: string | null;
+  agent_id?: string | null;
   status: AgentRunListItem["status"];
   started_at: string | null;
   updated_at: string | null;
@@ -24,6 +25,7 @@ type BackendAgentRunListItem = {
 type BackendAgentRunToolCall = {
   id: string;
   agent_run_id: string | null;
+  agent_id?: string | null;
   tool_name: string;
   status: string;
   input: Record<string, unknown>;
@@ -45,12 +47,24 @@ type BackendAgentRunDetail = BackendAgentRunListItem & {
   tool_calls: BackendAgentRunToolCall[];
 };
 
-function mapAgentRunListItem(
-  run: BackendAgentRunListItem,
-): AgentRunListItem {
+function readAgentId(
+  value: string | null | undefined,
+  metadata: Record<string, unknown> | undefined,
+) {
+  if (typeof value === "string" && value.length > 0) {
+    return value;
+  }
+  const metadataAgentId = metadata?.agent_id;
+  return typeof metadataAgentId === "string" && metadataAgentId.length > 0
+    ? metadataAgentId
+    : null;
+}
+
+function mapAgentRunListItem(run: BackendAgentRunListItem): AgentRunListItem {
   return {
     id: run.id,
     conversationId: run.conversation_id,
+    agentId: readAgentId(run.agent_id, undefined),
     status: run.status,
     startedAt: run.started_at,
     updatedAt: run.updated_at,
@@ -67,6 +81,7 @@ function mapToolCall(toolCall: BackendAgentRunToolCall): AgentRunToolCall {
   return {
     id: toolCall.id,
     agentRunId: toolCall.agent_run_id,
+    agentId: readAgentId(toolCall.agent_id, toolCall.metadata),
     toolName: toolCall.tool_name,
     status: toolCall.status,
     input: toolCall.input,
@@ -78,19 +93,20 @@ function mapToolCall(toolCall: BackendAgentRunToolCall): AgentRunToolCall {
 }
 
 export function getAgentRuns() {
-  return apiRequest<BackendAgentRunListResponse>(API_ENDPOINTS.agentRuns).then<AgentRunListResponse>(
-    (data) => ({
-      items: data.items.map(mapAgentRunListItem),
-      total: data.total,
-    }),
-  );
+  return apiRequest<BackendAgentRunListResponse>(API_ENDPOINTS.agentRuns).then<
+    AgentRunListResponse
+  >((data) => ({
+    items: data.items.map(mapAgentRunListItem),
+    total: data.total,
+  }));
 }
 
 export function getAgentRunDetail(runId: string) {
   return apiRequest<BackendAgentRunDetail>(
-    `${API_ENDPOINTS.agentRuns}/${runId}`,
+    API_ENDPOINTS.agentRunDetail(runId),
   ).then<AgentRunDetail>((data) => ({
     ...mapAgentRunListItem(data),
+    agentId: readAgentId(data.agent_id, data.metadata),
     input: data.input,
     output: data.output,
     metadata: data.metadata,

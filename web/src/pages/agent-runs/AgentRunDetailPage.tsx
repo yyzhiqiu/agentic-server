@@ -51,7 +51,7 @@ export function AgentRunDetailPage() {
         </p>
         <h1 className="mt-2 text-3xl font-semibold text-slate-900">运行详情</h1>
         <p className="mt-2 max-w-3xl text-sm text-slate-600">
-          这里展示状态摘要、输入输出和工具调用轨迹，便于排查一次运行的完整上下文。
+          这里展示状态摘要、所属 Agent、输入输出和工具调用轨迹，便于排查一次运行的完整上下文。
         </p>
       </div>
 
@@ -84,7 +84,15 @@ export function AgentRunDetailPage() {
 
             <Separator />
 
-            <div className="grid gap-3 text-sm text-slate-600 md:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-3 text-sm text-slate-600 md:grid-cols-2 lg:grid-cols-5">
+              <div>
+                <p className="text-xs uppercase tracking-[0.16em] text-slate-400">
+                  Agent
+                </p>
+                <p className="mt-1 break-all text-slate-700">
+                  {runQuery.data.agentId ?? "未知"}
+                </p>
+              </div>
               <div>
                 <p className="text-xs uppercase tracking-[0.16em] text-slate-400">
                   开始时间
@@ -192,7 +200,10 @@ export function AgentRunDetailPage() {
             ) : (
               <div className="grid gap-4">
                 {runQuery.data.toolCalls.map((toolCall) => (
-                  <Card key={toolCall.id} className="space-y-4 border border-slate-200 bg-slate-50/70 shadow-none">
+                  <Card
+                    key={toolCall.id}
+                    className="space-y-4 border border-slate-200 bg-slate-50/70 shadow-none"
+                  >
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                       <div>
                         <h3 className="text-base font-semibold text-slate-900">
@@ -200,6 +211,9 @@ export function AgentRunDetailPage() {
                         </h3>
                         <p className="mt-1 text-sm text-slate-500">
                           工具调用 ID: {toolCall.id}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-400">
+                          Agent: {toolCall.agentId ?? runQuery.data.agentId ?? "未知"}
                         </p>
                       </div>
                       <Badge>{toolCall.status}</Badge>

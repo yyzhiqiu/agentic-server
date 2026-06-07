@@ -106,6 +106,8 @@ class _FakeConversationRepository:
         conversation.id = conversation.id or f"conversation-{len(self.items) + 1}"
         if conversation.created_at is None:
             conversation.created_at = datetime.now(timezone.utc)
+        if not getattr(conversation, "agent_id", None):
+            conversation.agent_id = "chat_agent"
         self.items[conversation.id] = conversation
         return conversation
 
@@ -149,6 +151,8 @@ class _FakeAgentRunRepository:
         agent_run.id = agent_run.id or f"run-{len(self.items) + 1}"
         if agent_run.created_at is None:
             agent_run.created_at = datetime.now(timezone.utc)
+        if not getattr(agent_run, "agent_id", None):
+            agent_run.agent_id = "chat_agent"
         self.items[agent_run.id] = agent_run
         return agent_run
 
@@ -235,8 +239,11 @@ async def test_chat_service_creates_conversation_and_persists_chat_state() -> No
     assert response.message.role == "assistant"
     assert response.metadata["model"] == "mock"
     assert response.metadata["run_id"] == "run-1"
+    assert response.metadata["agent_id"] == "chat_agent"
     assert conversations.items["conversation-1"].title == "hello world"
+    assert conversations.items["conversation-1"].agent_id == "chat_agent"
     assert [message.role for message in messages.items] == ["user", "assistant"]
+    assert agent_runs.items["run-1"].agent_id == "chat_agent"
     assert agent_runs.items["run-1"].status == "completed"
     assert agent_runs.items["run-1"].conversation_id == "conversation-1"
     assert graph.requests[0][0].conversation_id == "conversation-1"
@@ -254,7 +261,13 @@ async def test_chat_service_reuses_existing_conversation_without_replaying_histo
     user = CurrentUser(id="user-1", name="tester")
 
     conversation = await conversations.add(
-        Conversation(id="conversation-9", user_id="user-1", title="demo", metadata_={})
+        Conversation(
+            id="conversation-9",
+            user_id="user-1",
+            agent_id="chat_agent",
+            title="demo",
+            metadata_={},
+        )
     )
     await persisted_messages.add(
         Message(conversation_id=conversation.id, role="user", content="hello", metadata_={})
@@ -291,6 +304,36 @@ async def test_chat_service_reuses_existing_conversation_without_replaying_histo
 
 
 @pytest.mark.asyncio
+async def test_chat_service_rejects_conversation_bound_to_other_agent() -> None:
+    conversations = _FakeConversationRepository()
+    service, _, _, _, _, _ = _build_service(conversation_repository=conversations)
+    user = CurrentUser(id="user-1", name="tester")
+
+    await conversations.add(
+        Conversation(
+            id="conversation-9",
+            user_id="user-1",
+            agent_id="code_agent",
+            title="demo",
+            metadata_={"agent_id": "code_agent"},
+        )
+    )
+
+    with pytest.raises(AppException) as exc_info:
+        await service.chat(
+            ChatRequest(
+                conversation_id="conversation-9",
+                messages=[ChatMessage(role="user", content="continue")],
+            ),
+            user,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.data["conversation_agent_id"] == "code_agent"
+    assert exc_info.value.data["requested_agent_id"] == "chat_agent"
+
+
+@pytest.mark.asyncio
 async def test_chat_service_raises_not_found_for_unknown_conversation() -> None:
     service, _, _, _, _, _ = _build_service()
 
@@ -319,6 +362,7 @@ async def test_chat_service_marks_run_failed_when_graph_execution_errors() -> No
         )
 
     assert [message.role for message in messages.items] == ["user"]
+    assert agent_runs.items["run-1"].agent_id == "chat_agent"
     assert agent_runs.items["run-1"].status == "failed"
     assert agent_runs.items["run-1"].output["error"] == "LLM_API_KEY is not configured"
     assert agent_runs.items["run-1"].output["code"] == "L00001"
@@ -352,6 +396,7 @@ async def test_chat_service_persists_tool_calls_for_completed_runs() -> None:
     assert tool_call_repository.items[0].agent_run_id == "run-1"
     assert tool_call_repository.items[0].tool_name == "search"
     assert tool_call_repository.items[0].output == {"hits": 3}
+    assert tool_call_repository.items[0].metadata_["agent_id"] == "chat_agent"
     assert agent_runs.items["run-1"].output["tool_calls"][0]["tool_name"] == "search"
 
 
@@ -369,6 +414,7 @@ async def test_chat_service_records_audit_event_on_success() -> None:
     assert audit_writer.events[0].action == AuditAction.CHAT
     assert audit_writer.events[0].result == AuditResult.SUCCESS
     assert audit_writer.events[0].actor_id == "user-1"
+    assert audit_writer.events[0].agent_id == "chat_agent"
 
 
 @pytest.mark.asyncio
@@ -384,6 +430,8 @@ async def test_chat_service_handles_read_then_write_autobegin_flow() -> None:
     assert response.conversation_id == "conversation-1"
     assert users.items["user-1"].name == "tester"
     assert [message.role for message in messages.items] == ["user", "assistant"]
+    assert conversations.items["conversation-1"].agent_id == "chat_agent"
+    assert agent_runs.items["run-1"].agent_id == "chat_agent"
     assert agent_runs.items["run-1"].status == "completed"
     assert conversations.items["conversation-1"].title == "hello autobegin"
     assert session.rollback_calls == 0
@@ -402,7 +450,9 @@ async def test_chat_service_stream_persists_successful_chat_lifecycle() -> None:
     assert any("event: message" in event and "Mock response" in event for event in events)
     assert any("event: done" in event for event in events)
     assert conversations.items["conversation-1"].title == "stream hello"
+    assert conversations.items["conversation-1"].agent_id == "chat_agent"
     assert [message.role for message in messages.items] == ["user", "assistant"]
+    assert agent_runs.items["run-1"].agent_id == "chat_agent"
     assert agent_runs.items["run-1"].status == "completed"
     assert users.items["user-1"].name == "tester"
     assert graph.requests[0][0].conversation_id == "conversation-1"
@@ -411,6 +461,7 @@ async def test_chat_service_stream_persists_successful_chat_lifecycle() -> None:
     payload = json.loads(done_event.split("data: ", 1)[1])
     assert payload["data"]["conversation_id"] == "conversation-1"
     assert payload["data"]["metadata"]["run_id"] == "run-1"
+    assert payload["data"]["metadata"]["agent_id"] == "chat_agent"
 
 
 @pytest.mark.asyncio
@@ -435,6 +486,7 @@ async def test_chat_service_stream_marks_run_failed_when_graph_yields_error() ->
 
     assert any("event: error" in event for event in events)
     assert [message.role for message in messages.items] == ["user"]
+    assert agent_runs.items["run-1"].agent_id == "chat_agent"
     assert agent_runs.items["run-1"].status == "failed"
     assert agent_runs.items["run-1"].output["error"] == "LLM_API_KEY is not configured"
     assert agent_runs.items["run-1"].output["code"] == "L00001"

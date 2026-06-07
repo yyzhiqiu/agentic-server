@@ -1,9 +1,4 @@
-"""面向聊天请求的图执行适配器。
-
-本模块封装预先构建好的 LangGraph 实例，并将图执行结果转换为聊天 Schema
-和流式事件。它不负责持久化或 HTTP 响应编排，这些职责保留在 Service
-层与 API 层中。
-"""
+"""面向聊天请求的图执行适配器。"""
 
 from __future__ import annotations
 
@@ -15,31 +10,58 @@ from app.common.exceptions import GraphException, LLMException
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse, ChatStreamEvent
 from app.schemas.tool_call import ToolCallPayload
 
+
 class GraphRunner:
     """基于预构建 LangGraph 实例执行聊天请求。"""
 
-    def __init__(self, graph: Any, *, llm_available: bool = True) -> None:
+    def __init__(
+        self,
+        graph: Any,
+        *,
+        agent_id: str | None = None,
+        llm_available: bool | None = None,
+    ) -> None:
         self.graph = graph
+        self.agent_id = agent_id or "unknown_agent"
         self.llm_available = llm_available
 
     @staticmethod
     def format_sse(event: str, payload: ChatStreamEvent | dict[str, Any]) -> str:
-        """将结构化流式事件序列化为一个 SSE 数据块。"""
+        """将结构化流式事件序列化为 SSE 数据块。"""
 
         body = payload.model_dump() if isinstance(payload, ChatStreamEvent) else payload
         return f"event: {event}\ndata: {json.dumps(body, ensure_ascii=False)}\n\n"
 
-    @staticmethod
-    def _build_state(request: ChatRequest, *, user_id: str | None = None) -> dict[str, Any]:
-        return {
+    def _build_state(self, request: ChatRequest, *, user_id: str | None = None) -> dict[str, Any]:
+        """把聊天请求规整为图执行状态。
+
+        这里优先读取显式 Schema 字段，再兼容旧版 ``metadata`` 扩展字段，
+        让前端能够在切换到多 Agent 后直接使用稳定的请求契约。
+        """
+
+        metadata = dict(request.metadata)
+        metadata.setdefault("agent_id", self.agent_id)
+        state: dict[str, Any] = {
             "messages": [message.model_dump() for message in request.messages],
             "user_id": request.user_id or user_id,
             "conversation_id": request.conversation_id,
-            "metadata": request.metadata,
+            "metadata": metadata,
         }
+
+        for key in ("repository_context", "changed_files", "task_type"):
+            if hasattr(request, key):
+                value = getattr(request, key)
+                if value is not None:
+                    state[key] = value
+                    continue
+            if key in metadata:
+                state[key] = metadata[key]
+        return state
 
     @staticmethod
     def _messages_to_chat_messages(raw_messages: list[dict[str, Any]]) -> list[ChatMessage]:
+        """把图状态中的消息数组转换为聊天消息 Schema。"""
+
         return [
             ChatMessage(
                 role=message.get("role", "assistant"),
@@ -52,6 +74,8 @@ class GraphRunner:
 
     @staticmethod
     def _assistant_message(messages: list[ChatMessage]) -> ChatMessage | None:
+        """提取最后一条 assistant 消息。"""
+
         return next(
             (message for message in reversed(messages) if message.role == "assistant"),
             None,
@@ -111,6 +135,8 @@ class GraphRunner:
 
     @staticmethod
     def _extract_state_chunk(event: dict[str, Any]) -> dict[str, Any] | None:
+        """从 LangGraph 流事件中提取包含 messages 的状态片段。"""
+
         chunk = event.get("data", {}).get("chunk")
         if not isinstance(chunk, dict):
             return None
@@ -121,59 +147,82 @@ class GraphRunner:
                 return value
         return None
 
-    @classmethod
-    def _response_from_result(
-        cls, result: dict[str, Any], request: ChatRequest
-    ) -> ChatResponse:
+    def _response_from_result(self, result: dict[str, Any], request: ChatRequest) -> ChatResponse:
+        """把图执行结果转换为标准聊天响应。"""
+
         raw_messages = result.get("messages", [])
-        messages = cls._messages_to_chat_messages(raw_messages)
-        assistant_message = cls._assistant_message(messages)
+        messages = self._messages_to_chat_messages(raw_messages)
+        assistant_message = self._assistant_message(messages)
         if assistant_message is None:
             raise GraphException(
                 "Agent Graph 执行失败",
                 data={"error": "Graph result does not contain an assistant message"},
             )
+
+        metadata = result.get("metadata")
+        response_metadata = metadata if isinstance(metadata, dict) else {}
+        agent_id = result.get("agent_id")
+        if not isinstance(agent_id, str) or not agent_id:
+            agent_id = response_metadata.get("agent_id")
+        if not isinstance(agent_id, str) or not agent_id:
+            agent_id = request.metadata.get("agent_id")
+        if not isinstance(agent_id, str) or not agent_id:
+            agent_id = self.agent_id
+
         return ChatResponse(
             conversation_id=result.get("conversation_id") or request.conversation_id,
+            agent_id=agent_id,
             message=assistant_message,
             messages=messages,
-            metadata=result.get("metadata", {}),
-            tool_calls=cls._tool_calls_from_result(result),
+            metadata={
+                **response_metadata,
+                "agent_id": agent_id,
+            },
+            tool_calls=self._tool_calls_from_result(result),
         )
 
     async def run_chat(self, request: ChatRequest, *, user_id: str | None = None) -> ChatResponse:
         """为聊天请求执行一次非流式图调用。"""
 
-        if not self.llm_available:
-            raise LLMException("LLM_API_KEY is not configured", data={"provider": "mock-disabled"})
+        if self.llm_available is False:
+            raise LLMException(
+                "LLM_API_KEY is not configured",
+                data={"agent_id": self.agent_id},
+            )
+
         try:
             state = self._build_state(request, user_id=user_id)
             result = await self.graph.ainvoke(state)
         except Exception as exc:
-            raise GraphException("Agent Graph 执行失败", data={"error": str(exc)}) from exc
+            raise GraphException(
+                "Agent Graph 执行失败",
+                data={"error": str(exc), "agent_id": self.agent_id},
+            ) from exc
 
         return self._response_from_result(result, request)
 
     async def stream_chat_events(
-        self, request: ChatRequest, *, user_id: str | None = None
+        self,
+        request: ChatRequest,
+        *,
+        user_id: str | None = None,
     ) -> AsyncIterator[tuple[str, ChatStreamEvent]]:
         """为聊天请求持续产出结构化流式事件。"""
 
-        if not self.llm_available:
-            error = LLMException("LLM_API_KEY is not configured", data={"provider": "mock-disabled"})
+        yield ("start", ChatStreamEvent(type="start"))
+        if self.llm_available is False:
             yield (
                 "error",
                 ChatStreamEvent(
                     type="error",
-                    content=error.message,
+                    content="LLM_API_KEY is not configured",
                     data={
-                        **error.data,
-                        "code": error.code.value,
+                        "code": LLMException().code.value,
+                        "agent_id": self.agent_id,
                     },
                 ),
             )
             return
-        yield ("start", ChatStreamEvent(type="start"))
         state = self._build_state(request, user_id=user_id)
         last_content: str | None = None
         final_result: dict[str, Any] | None = None
@@ -223,7 +272,7 @@ class GraphRunner:
         except Exception as exc:
             error = exc if isinstance(exc, GraphException) else GraphException(
                 "Agent Graph 执行失败",
-                data={"error": str(exc)},
+                data={"error": str(exc), "agent_id": self.agent_id},
             )
             yield (
                 "error",
@@ -238,9 +287,12 @@ class GraphRunner:
             )
 
     async def stream_chat(
-        self, request: ChatRequest, *, user_id: str | None = None
+        self,
+        request: ChatRequest,
+        *,
+        user_id: str | None = None,
     ) -> AsyncIterator[str]:
-        """将结构化图流式事件序列化为 SSE 数据块。"""
+        """将结构化图流事件序列化为 SSE 数据块。"""
 
         async for event, payload in self.stream_chat_events(request, user_id=user_id):
             yield self.format_sse(event, payload)

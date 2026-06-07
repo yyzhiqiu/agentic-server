@@ -1,9 +1,4 @@
-"""聊天业务编排服务。
-
-本服务围绕共享的 LangGraph 运行器协调同步与流式聊天流程，负责会话解析、
-消息去重、Agent 运行生命周期持久化以及审计记录，而图执行本身仍由
-``GraphRunner`` 负责。
-"""
+"""聊天业务编排服务。"""
 
 from __future__ import annotations
 
@@ -26,6 +21,7 @@ from app.db.repositories.agent_run_repo import AgentRunRepository
 from app.db.repositories.conversation_repo import ConversationRepository
 from app.db.repositories.message_repo import MessageRepository
 from app.db.transaction import transaction
+from app.graph.default import DEFAULT_AGENT_ID
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse, ChatStreamEvent
 from app.services.graph_runner import GraphRunner
 from app.services.tool_call_service import ToolCallService
@@ -33,12 +29,7 @@ from app.services.user_service import UserService
 
 
 class ChatService:
-    """编排聊天执行与持久化流程。
-
-    本服务负责聊天请求相关的业务流程，包括轻量用户准备、会话解析、
-    请求与响应消息持久化、Agent 运行跟踪、流式生命周期处理以及审计记录。
-    图执行和事件翻译仍只由图运行器负责。
-    """
+    """编排聊天执行与持久化流程。"""
 
     def __init__(
         self,
@@ -49,6 +40,7 @@ class ChatService:
         message_repository: MessageRepository,
         agent_run_repository: AgentRunRepository,
         user_service: UserService,
+        agent_id: str = DEFAULT_AGENT_ID,
         tool_call_service: ToolCallService | None = None,
         audit_service: AuditService | None = None,
     ) -> None:
@@ -58,12 +50,13 @@ class ChatService:
         self.message_repository = message_repository
         self.agent_run_repository = agent_run_repository
         self.user_service = user_service
+        self.agent_id = agent_id
         self.tool_call_service = tool_call_service
         self.audit_service = audit_service or AuditService()
 
     @staticmethod
     def _derive_conversation_title(messages: list[ChatMessage]) -> str | None:
-        """从首条用户消息中提取简短的会话标题。"""
+        """从首条用户消息中提取简短会话标题。"""
 
         for message in messages:
             if message.role != "user":
@@ -75,8 +68,21 @@ class ChatService:
         return None
 
     @staticmethod
+    def _conversation_agent_id(conversation: Conversation) -> str:
+        """读取会话绑定的 Agent 标识。"""
+
+        if isinstance(conversation.agent_id, str) and conversation.agent_id:
+            return conversation.agent_id
+
+        metadata = dict(conversation.metadata_ or {})
+        agent_id = metadata.get("agent_id")
+        if isinstance(agent_id, str) and agent_id:
+            return agent_id
+        return DEFAULT_AGENT_ID
+
+    @staticmethod
     def _message_to_model(conversation_id: str, message: ChatMessage) -> Message:
-        """将 API 聊天消息转换为可持久化的 ORM 消息记录。"""
+        """把聊天消息转换为可持久化的 ORM 消息记录。"""
 
         metadata = dict(message.metadata)
         if message.name is not None:
@@ -90,7 +96,7 @@ class ChatService:
 
     @staticmethod
     def _message_from_model(message: Message) -> ChatMessage:
-        """将已持久化的 ORM 消息转换为聊天 Schema。"""
+        """把已持久化的 ORM 消息转换为聊天 Schema。"""
 
         metadata = dict(message.metadata_ or {})
         name = metadata.pop("name", None)
@@ -103,7 +109,7 @@ class ChatService:
 
     @staticmethod
     def _messages_equal(left: ChatMessage, right: ChatMessage) -> bool:
-        """使用服务层会持久化的字段比较两条聊天消息是否相等。"""
+        """使用持久化相关字段比较两条聊天消息是否相等。"""
 
         return (
             left.role == right.role
@@ -117,16 +123,18 @@ class ChatService:
         response: ChatResponse,
         *,
         run_id: str,
+        agent_id: str,
     ) -> dict[str, Any]:
-        """为响应负载补充由服务层维护的元信息。"""
+        """为响应补充由服务层维护的元信息。"""
 
         metadata = dict(response.metadata)
         metadata["run_id"] = run_id
+        metadata["agent_id"] = agent_id
         return metadata
 
     @staticmethod
     def _build_run_failure_output(exc: Exception) -> dict[str, Any]:
-        """将图执行或 LLM 失败序列化为 Agent 运行输出元数据。"""
+        """把图执行失败信息序列化为运行输出元数据。"""
 
         data: dict[str, Any] = {
             "error": str(exc),
@@ -139,7 +147,7 @@ class ChatService:
 
     @staticmethod
     def _build_stream_failure_output(event: ChatStreamEvent) -> dict[str, Any]:
-        """将流式错误事件序列化为 Agent 运行输出元数据。"""
+        """把流式错误事件序列化为运行输出元数据。"""
 
         data: dict[str, Any] = {
             "error": event.content or "stream execution failed",
@@ -158,6 +166,7 @@ class ChatService:
         *,
         conversation_id: str | None = None,
         run_id: str | None = None,
+        agent_id: str | None = None,
     ) -> ChatStreamEvent:
         """根据异常构建面向客户端的流式错误事件。"""
 
@@ -176,6 +185,8 @@ class ChatService:
             data.setdefault("conversation_id", conversation_id)
         if run_id is not None:
             data.setdefault("run_id", run_id)
+        if agent_id is not None:
+            data.setdefault("agent_id", agent_id)
 
         return ChatStreamEvent(
             type="error",
@@ -189,12 +200,14 @@ class ChatService:
         *,
         conversation_id: str,
         run_id: str,
+        agent_id: str,
     ) -> ChatStreamEvent:
         """为流式事件补充会话和运行元信息。"""
 
         data = dict(event.data)
         data.setdefault("conversation_id", conversation_id)
         data.setdefault("run_id", run_id)
+        data.setdefault("agent_id", agent_id)
         return event.model_copy(update={"data": data})
 
     async def _resolve_conversation(
@@ -215,14 +228,30 @@ class ChatService:
                     status_code=404,
                     data={"conversation_id": request.conversation_id},
                 )
+
+            conversation_agent_id = self._conversation_agent_id(conversation)
+            if conversation_agent_id != self.agent_id:
+                raise AppException(
+                    ErrorCode.REQUEST_VALIDATION_ERROR,
+                    message="当前会话已绑定到其他 Agent，请切换到对应智能体后继续对话。",
+                    status_code=409,
+                    data={
+                        "conversation_id": request.conversation_id,
+                        "conversation_agent_id": conversation_agent_id,
+                        "requested_agent_id": self.agent_id,
+                    },
+                )
             return conversation
 
         async with transaction(self.session):
+            metadata = dict(request.metadata)
+            metadata.setdefault("agent_id", self.agent_id)
             conversation = await self.conversation_repository.add(
                 Conversation(
                     user_id=user.id,
+                    agent_id=self.agent_id,
                     title=self._derive_conversation_title(request.messages),
-                    metadata_=dict(request.metadata),
+                    metadata_=metadata,
                 )
             )
 
@@ -233,13 +262,7 @@ class ChatService:
         conversation_id: str,
         incoming_messages: list[ChatMessage],
     ) -> list[ChatMessage]:
-        """只返回仍需持久化的消息。
-
-        API 常常会在每次请求时提交完整会话历史。
-        这个辅助方法把已存储消息视为前缀，只持久化新增的后缀部分。
-        如果两边历史出现意外分叉，则退化为只持久化最新一条输入消息，
-        避免重复回放大量历史记录。
-        """
+        """只返回仍需持久化的消息。"""
 
         if not incoming_messages:
             return []
@@ -289,11 +312,15 @@ class ChatService:
             agent_run = await self.agent_run_repository.add(
                 AgentRun(
                     conversation_id=conversation.id,
+                    agent_id=self.agent_id,
                     user_id=user.id,
                     status="running",
                     input=request.model_dump(),
                     output={},
-                    metadata_={"trace_id": get_trace_id()},
+                    metadata_={
+                        "trace_id": get_trace_id(),
+                        "agent_id": self.agent_id,
+                    },
                 )
             )
 
@@ -305,7 +332,7 @@ class ChatService:
         conversation: Conversation,
         response: ChatResponse,
     ) -> None:
-        """持久化图执行结果，并将运行状态标记为完成。"""
+        """持久化图执行结果，并标记运行完成。"""
 
         pending_messages = await self._list_pending_messages(
             conversation.id,
@@ -322,8 +349,10 @@ class ChatService:
                 await self.tool_call_service.record_for_run(
                     agent_run.id,
                     response.tool_calls,
+                    agent_id=self.agent_id,
                 )
 
+            agent_run.agent_id = self.agent_id
             agent_run.status = "completed"
             agent_run.output = response.model_dump()
             await self.session.flush()
@@ -332,8 +361,11 @@ class ChatService:
         """在图执行失败时持久化失败详情。"""
 
         async with transaction(self.session):
+            agent_run.agent_id = self.agent_id
             agent_run.status = "failed"
-            agent_run.output = self._build_run_failure_output(exc)
+            output = self._build_run_failure_output(exc)
+            output["agent_id"] = self.agent_id
+            agent_run.output = output
             await self.session.flush()
 
     async def _fail_chat_run_from_stream_event(
@@ -341,11 +373,14 @@ class ChatService:
         agent_run: AgentRun,
         event: ChatStreamEvent,
     ) -> None:
-        """将流式错误事件持久化为最终运行输出。"""
+        """把流式错误事件持久化为最终运行输出。"""
 
         async with transaction(self.session):
+            agent_run.agent_id = self.agent_id
             agent_run.status = "failed"
-            agent_run.output = self._build_stream_failure_output(event)
+            output = self._build_stream_failure_output(event)
+            output["agent_id"] = self.agent_id
+            agent_run.output = output
             await self.session.flush()
 
     async def _prepare_chat_execution(
@@ -362,6 +397,10 @@ class ChatService:
             update={
                 "conversation_id": conversation.id,
                 "user_id": user.id,
+                "metadata": {
+                    **request.metadata,
+                    "agent_id": self.agent_id,
+                },
             }
         )
         agent_run = await self._start_chat_run(graph_request, conversation, user)
@@ -377,42 +416,37 @@ class ChatService:
     ) -> ChatResponse:
         """持久化成功输出，并补充 API 响应内容。"""
 
-        await self._complete_chat_run(agent_run, conversation, response)
+        finalized_response = response.model_copy(
+            update={
+                "conversation_id": conversation.id,
+                "agent_id": self.agent_id,
+                "metadata": self._merge_response_metadata(
+                    response,
+                    run_id=agent_run.id,
+                    agent_id=self.agent_id,
+                ),
+            }
+        )
+        await self._complete_chat_run(agent_run, conversation, finalized_response)
         await self.audit_service.record(
             AuditEvent(
                 action=AuditAction.CHAT,
                 result=AuditResult.SUCCESS,
                 actor_id=user.id,
                 trace_id=get_trace_id(),
+                agent_id=self.agent_id,
                 resource_type="conversation",
                 resource_id=conversation.id,
-                metadata={"run_id": agent_run.id},
+                metadata={
+                    "run_id": agent_run.id,
+                    "agent_id": self.agent_id,
+                },
             )
         )
-        return response.model_copy(
-            update={
-                "conversation_id": conversation.id,
-                "metadata": self._merge_response_metadata(
-                    response,
-                    run_id=agent_run.id,
-                ),
-            }
-        )
+        return finalized_response
 
     async def chat(self, request: ChatRequest, user: CurrentUser) -> ChatResponse:
-        """执行一次非流式聊天请求，并持久化其完整生命周期。
-
-        参数：
-            request: 当前调用方提交的聊天请求负载，可能包含完整消息历史。
-            user: 由 API 层解析出的请求级身份。
-
-        返回：
-            补充了持久化会话 ID 与 Agent 运行元信息的图执行响应。
-
-        副作用：
-            可能创建轻量用户记录、创建会话、追加请求与响应消息、
-            创建或更新 Agent 运行记录，并写入审计事件。
-        """
+        """执行一次非流式聊天请求，并持久化其完整生命周期。"""
 
         conversation, graph_request, agent_run = await self._prepare_chat_execution(
             request,
@@ -437,11 +471,7 @@ class ChatService:
         request: ChatRequest,
         user: CurrentUser,
     ) -> AsyncIterator[str]:
-        """执行一次流式聊天请求，并持久化其完整生命周期。
-
-        流式接口始终以 SSE 形式响应，因此一旦响应开始发送，
-        后续错误会被转换为 ``error`` 事件，而不是继续向上传播为 HTTP 异常。
-        """
+        """执行一次流式聊天请求，并持久化其完整生命周期。"""
 
         conversation: Conversation | None = None
         agent_run: AgentRun | None = None
@@ -453,7 +483,7 @@ class ChatService:
         except Exception as exc:
             yield GraphRunner.format_sse(
                 "error",
-                self._build_stream_error_event(exc),
+                self._build_stream_error_event(exc, agent_id=self.agent_id),
             )
             return
 
@@ -480,6 +510,7 @@ class ChatService:
                     event,
                     conversation_id=conversation.id,
                     run_id=agent_run.id,
+                    agent_id=self.agent_id,
                 )
 
                 if event_name == "error":
@@ -496,5 +527,6 @@ class ChatService:
                     exc,
                     conversation_id=conversation.id,
                     run_id=agent_run.id,
+                    agent_id=self.agent_id,
                 ),
             )

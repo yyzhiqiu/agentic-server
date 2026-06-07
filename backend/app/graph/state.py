@@ -1,10 +1,3 @@
-from __future__ import annotations
+"""默认 AgentState 的兼容导出模块。"""
 
-from typing import Any, TypedDict
-
-
-class AgentState(TypedDict, total=False):
-    messages: list[dict[str, Any]]
-    user_id: str | None
-    conversation_id: str | None
-    metadata: dict[str, Any]
+from app.graph.chat_agent.state import ChatAgentState as AgentState

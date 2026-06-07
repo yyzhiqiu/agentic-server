@@ -1,17 +1,27 @@
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
 import { useConversationDetail } from "@/features/conversations/hooks";
 import { EmptyState } from "@/shared/components/feedback/EmptyState";
 import { ErrorState } from "@/shared/components/feedback/ErrorState";
 import { LoadingState } from "@/shared/components/feedback/LoadingState";
+import { Button } from "@/shared/components/ui/button";
+import { Card } from "@/shared/components/ui/card";
 import { ScrollArea } from "@/shared/components/ui/scroll-area";
 import { Separator } from "@/shared/components/ui/separator";
-import { Card } from "@/shared/components/ui/card";
 import { GUEST_USER_LABEL } from "@/shared/constants/app";
+import { ROUTES } from "@/shared/constants/routes";
 import { formatDate } from "@/shared/lib/date";
 import { MessageList } from "@/pages/chat/components/MessageList";
 
+function buildContinueUrl(conversationId: string, agentId: string | null) {
+  const params = new URLSearchParams();
+  params.set("conversationId", conversationId);
+  params.set("agentId", agentId ?? "chat_agent");
+  return `${ROUTES.chat}?${params.toString()}`;
+}
+
 export function ConversationDetailPage() {
+  const navigate = useNavigate();
   const { conversationId } = useParams();
   const conversationQuery = useConversationDetail(conversationId ?? "");
   const messages = (conversationQuery.data?.messages ?? []).map((message) => ({
@@ -28,7 +38,7 @@ export function ConversationDetailPage() {
         </p>
         <h1 className="mt-2 text-3xl font-semibold text-slate-900">会话详情</h1>
         <p className="mt-2 max-w-3xl text-sm text-slate-600">
-          这里展示会话元信息和已持久化消息列表，便于查看单个会话的完整上下文。
+          这里展示会话元信息、绑定智能体和已持久化消息，并支持直接回到聊天页继续对话。
         </p>
       </div>
 
@@ -50,24 +60,47 @@ export function ConversationDetailPage() {
       conversationQuery.data ? (
         <>
           <Card className="space-y-4">
-            <div>
-              <h2 className="text-xl font-semibold text-slate-900">
-                {conversationQuery.data.title ?? "未命名会话"}
-              </h2>
-              <p className="mt-2 break-all text-sm text-slate-500">
-                会话 ID: {conversationQuery.data.id}
-              </p>
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <h2 className="text-xl font-semibold text-slate-900">
+                  {conversationQuery.data.title ?? "未命名会话"}
+                </h2>
+                <p className="mt-2 break-all text-sm text-slate-500">
+                  会话 ID: {conversationQuery.data.id}
+                </p>
+              </div>
+              <Button
+                size="sm"
+                onClick={() => {
+                  navigate(
+                    buildContinueUrl(
+                      conversationQuery.data.id,
+                      conversationQuery.data.agentId,
+                    ),
+                  );
+                }}
+              >
+                继续对话
+              </Button>
             </div>
 
             <Separator />
 
-            <div className="grid gap-3 text-sm text-slate-600 md:grid-cols-3">
+            <div className="grid gap-3 text-sm text-slate-600 md:grid-cols-4">
               <div>
                 <p className="text-xs uppercase tracking-[0.16em] text-slate-400">
                   用户
                 </p>
                 <p className="mt-1 break-all text-slate-700">
                   {conversationQuery.data.userId ?? GUEST_USER_LABEL}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs uppercase tracking-[0.16em] text-slate-400">
+                  Agent
+                </p>
+                <p className="mt-1 text-slate-700">
+                  {conversationQuery.data.agentId ?? "chat_agent"}
                 </p>
               </div>
               <div>

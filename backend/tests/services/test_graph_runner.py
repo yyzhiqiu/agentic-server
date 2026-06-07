@@ -1,9 +1,11 @@
+"""图执行适配器的基础行为测试。"""
+
 from __future__ import annotations
 
 import pytest
 
 from app.common.exceptions import LLMException
-from app.graph.builder import build_graph
+from app.graph.chat_agent.builder import build_chat_agent
 from app.schemas.chat import ChatMessage, ChatRequest
 from app.services.graph_runner import GraphRunner
 
@@ -31,7 +33,7 @@ class _GraphWithToolCalls:
 
 @pytest.mark.asyncio
 async def test_graph_runner_returns_mock_response() -> None:
-    runner = GraphRunner(build_graph(llm=None))
+    runner = GraphRunner(build_chat_agent(llm=None), agent_id="chat_agent")
     request = ChatRequest(
         conversation_id="conversation-1",
         messages=[ChatMessage(role="user", content="hello")],
@@ -61,7 +63,11 @@ async def test_graph_runner_extracts_tool_calls_from_graph_result() -> None:
 
 @pytest.mark.asyncio
 async def test_graph_runner_raises_when_llm_is_marked_unavailable() -> None:
-    runner = GraphRunner(build_graph(llm=None), llm_available=False)
+    runner = GraphRunner(
+        build_chat_agent(llm=None),
+        agent_id="chat_agent",
+        llm_available=False,
+    )
     request = ChatRequest(messages=[ChatMessage(role="user", content="hello")])
 
     with pytest.raises(LLMException):

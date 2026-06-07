@@ -28,6 +28,7 @@ class _FakeAgentRun:
         self,
         *,
         id: str,
+        agent_id: str,
         user_id: str,
         status: str,
         input: dict[str, Any],
@@ -38,6 +39,7 @@ class _FakeAgentRun:
         updated_at: datetime | None = None,
     ) -> None:
         self.id = id
+        self.agent_id = agent_id
         self.conversation_id = conversation_id
         self.user_id = user_id
         self.status = status
@@ -123,9 +125,15 @@ async def test_agent_run_service_creates_and_reads_run_status() -> None:
         audit_service=AuditService(writer=audit_writer),
     )
 
-    created = await service.resume("run-1", {"approved": True}, "user-1")
+    created = await service.resume(
+        "run-1",
+        {"approved": True},
+        "user-1",
+        agent_id="code_agent",
+    )
     assert created.status == "running"
     assert created.run_id == "run-1"
+    assert created.agent_id == "code_agent"
     assert created.metadata == {"approved": True}
     assert len(audit_writer.events) == 1
     assert audit_writer.events[0].action == AuditAction.AGENT_RESUME
@@ -141,6 +149,7 @@ async def test_agent_run_service_creates_and_reads_run_status() -> None:
     fetched = await service.status("run-1", "user-1")
     assert fetched.status == "running"
     assert fetched.run_id == "run-1"
+    assert fetched.agent_id == "code_agent"
 
 
 @pytest.mark.asyncio
@@ -152,10 +161,16 @@ async def test_agent_run_service_interrupts_existing_run() -> None:
         audit_service=AuditService(writer=audit_writer),
     )
 
-    await service.resume("run-1", {"approved": True}, "user-1")
-    interrupted = await service.interrupt("run-1", "manual review", "user-1")
+    await service.resume("run-1", {"approved": True}, "user-1", agent_id="chat_agent")
+    interrupted = await service.interrupt(
+        "run-1",
+        "manual review",
+        "user-1",
+        agent_id="chat_agent",
+    )
 
     assert interrupted.status == "interrupted"
+    assert interrupted.agent_id == "chat_agent"
     assert interrupted.metadata == {"reason": "manual review"}
 
     detail = await service.get("run-1", "user-1")
@@ -190,16 +205,18 @@ async def test_agent_run_service_lists_and_reads_user_runs() -> None:
         agent_run_repository=_FakeAgentRunRepository(),  # type: ignore[arg-type]
     )
 
-    await service.resume("run-1", {"trace_id": "trace-1"}, "user-1")
-    await service.resume("run-2", {"trace_id": "trace-2"}, "user-1")
+    await service.resume("run-1", {"trace_id": "trace-1"}, "user-1", agent_id="chat_agent")
+    await service.resume("run-2", {"trace_id": "trace-2"}, "user-1", agent_id="code_agent")
 
     listed = await service.list("user-1")
     assert listed.total == 2
     assert listed.items[0].id == "run-2"
+    assert listed.items[0].agent_id == "code_agent"
     assert listed.items[0].trace_id == "trace-2"
 
     detail = await service.get("run-1", "user-1")
     assert detail.id == "run-1"
+    assert detail.agent_id == "chat_agent"
     assert detail.input == {"trace_id": "trace-1"}
     assert detail.metadata == {"trace_id": "trace-1"}
 
@@ -211,6 +228,7 @@ async def test_agent_run_service_exposes_terminal_timestamps_and_duration() -> N
     updated_at = datetime(2026, 6, 7, 10, 0, 5, 500000, tzinfo=timezone.utc)
     repository.items["run-1"] = _FakeAgentRun(
         id="run-1",
+        agent_id="code_agent",
         user_id="user-1",
         status="completed",
         input={"trace_id": "trace-1"},
@@ -225,6 +243,7 @@ async def test_agent_run_service_exposes_terminal_timestamps_and_duration() -> N
     )
 
     listed = await service.list("user-1")
+    assert listed.items[0].agent_id == "code_agent"
     assert listed.items[0].updated_at == updated_at
     assert listed.items[0].finished_at == updated_at
     assert listed.items[0].duration_ms == 5500
@@ -240,6 +259,7 @@ async def test_agent_run_service_exposes_failed_run_reason_summary() -> None:
     repository = _FakeAgentRunRepository()
     repository.items["run-1"] = _FakeAgentRun(
         id="run-1",
+        agent_id="chat_agent",
         user_id="user-1",
         status="failed",
         input={"trace_id": "trace-1"},
@@ -252,6 +272,7 @@ async def test_agent_run_service_exposes_failed_run_reason_summary() -> None:
     )
 
     listed = await service.list("user-1")
+    assert listed.items[0].agent_id == "chat_agent"
     assert listed.items[0].error_message == "LLM_API_KEY is not configured"
     assert listed.items[0].error_code == "L00001"
     assert listed.items[0].interruption_reason is None
@@ -266,6 +287,7 @@ async def test_agent_run_service_filters_runs_by_status_and_conversation() -> No
     repository = _FakeAgentRunRepository()
     repository.items["run-1"] = _FakeAgentRun(
         id="run-1",
+        agent_id="chat_agent",
         user_id="user-1",
         conversation_id="conversation-1",
         status="completed",
@@ -276,6 +298,7 @@ async def test_agent_run_service_filters_runs_by_status_and_conversation() -> No
     )
     repository.items["run-2"] = _FakeAgentRun(
         id="run-2",
+        agent_id="code_agent",
         user_id="user-1",
         conversation_id="conversation-2",
         status="failed",
@@ -286,6 +309,7 @@ async def test_agent_run_service_filters_runs_by_status_and_conversation() -> No
     )
     repository.items["run-3"] = _FakeAgentRun(
         id="run-3",
+        agent_id="code_agent",
         user_id="user-1",
         conversation_id="conversation-1",
         status="failed",
@@ -307,6 +331,7 @@ async def test_agent_run_service_filters_runs_by_status_and_conversation() -> No
 
     assert filtered.total == 1
     assert [item.id for item in filtered.items] == ["run-3"]
+    assert filtered.items[0].agent_id == "code_agent"
 
 
 @pytest.mark.asyncio
@@ -327,6 +352,7 @@ async def test_agent_run_service_includes_tool_calls_in_detail() -> None:
     repository = _FakeAgentRunRepository()
     repository.items["run-1"] = _FakeAgentRun(
         id="run-1",
+        agent_id="chat_agent",
         user_id="user-1",
         status="completed",
         input={},
@@ -353,6 +379,7 @@ async def test_agent_run_service_includes_tool_calls_in_detail() -> None:
 
     detail = await service.get("run-1", "user-1")
 
+    assert detail.agent_id == "chat_agent"
     assert len(detail.tool_calls) == 1
     assert detail.tool_calls[0].tool_name == "search"
     assert detail.tool_calls[0].output == {"hits": 2}

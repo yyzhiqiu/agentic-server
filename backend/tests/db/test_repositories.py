@@ -47,7 +47,7 @@ async def test_base_repository_add_and_delete_flush_without_commit() -> None:
         delete=AsyncMock(),
     )
     repo = BaseRepository(session, Conversation)  # type: ignore[arg-type]
-    conversation = Conversation(title="demo")
+    conversation = Conversation(agent_id="chat_agent", title="demo")
 
     added = await repo.add(conversation)
     assert added is conversation

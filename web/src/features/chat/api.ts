@@ -32,10 +32,14 @@ type BackendChatRequest = {
   conversation_id?: string;
   user_id?: string;
   metadata: Record<string, unknown>;
+  repository_context?: Record<string, unknown>;
+  changed_files?: string[];
+  task_type?: string | null;
 };
 
 type BackendChatResponse = {
   conversation_id: string | null;
+  agent_id?: string | null;
   message: BackendChatMessage;
   messages: BackendChatMessage[];
   metadata: Record<string, unknown>;
@@ -78,12 +82,22 @@ function buildChatRequest(payload: ChatRequest): BackendChatRequest {
     conversation_id: payload.conversationId,
     user_id: payload.userId,
     metadata: payload.metadata ?? {},
+    repository_context: payload.repositoryContext,
+    changed_files: payload.changedFiles,
+    task_type: payload.taskType,
   };
 }
 
 function mapChatResponse(data: BackendChatResponse): ChatResponse {
+  const metadataAgentId = data.metadata.agent_id;
   return {
     conversationId: data.conversation_id,
+    agentId:
+      typeof data.agent_id === "string"
+        ? data.agent_id
+        : typeof metadataAgentId === "string"
+          ? metadataAgentId
+          : null,
     message: mapChatMessage(data.message),
     messages: data.messages.map(mapChatMessage),
     metadata: data.metadata,
@@ -94,6 +108,7 @@ function mapChatResponse(data: BackendChatResponse): ChatResponse {
 function readStreamMeta(data: Record<string, unknown>): ChatStreamMeta {
   const conversationId = data.conversation_id;
   const runId = data.run_id;
+  const agentId = data.agent_id;
 
   return {
     conversationId:
@@ -101,6 +116,7 @@ function readStreamMeta(data: Record<string, unknown>): ChatStreamMeta {
         ? conversationId
         : null,
     runId: typeof runId === "string" && runId.length > 0 ? runId : null,
+    agentId: typeof agentId === "string" && agentId.length > 0 ? agentId : null,
   };
 }
 
@@ -122,8 +138,20 @@ type StreamChatCallbacks = {
   onError?: (error: ApiError) => void;
 };
 
+export type AgentChatInput = {
+  agentId: string;
+  payload: ChatRequest;
+};
+
 export function sendChat(payload: ChatRequest) {
   return apiRequest<BackendChatResponse>(API_ENDPOINTS.chat, {
+    method: "POST",
+    body: JSON.stringify(buildChatRequest(payload)),
+  }).then<ChatResponse>(mapChatResponse);
+}
+
+export function sendAgentChat({ agentId, payload }: AgentChatInput) {
+  return apiRequest<BackendChatResponse>(API_ENDPOINTS.agentChat(agentId), {
     method: "POST",
     body: JSON.stringify(buildChatRequest(payload)),
   }).then<ChatResponse>(mapChatResponse);
@@ -133,14 +161,24 @@ export async function streamChat(
   payload: ChatRequest,
   callbacks: StreamChatCallbacks,
 ) {
-  const response = await fetch(
-    buildApiUrl(API_ENDPOINTS.chatStream),
+  return streamAgentChat(
     {
-      method: "POST",
-      headers: buildStreamHeaders(),
-      body: JSON.stringify(buildChatRequest(payload)),
+      agentId: "chat_agent",
+      payload,
     },
+    callbacks,
   );
+}
+
+export async function streamAgentChat(
+  input: AgentChatInput,
+  callbacks: StreamChatCallbacks,
+) {
+  const response = await fetch(buildApiUrl(API_ENDPOINTS.agentChatStream(input.agentId)), {
+    method: "POST",
+    headers: buildStreamHeaders(),
+    body: JSON.stringify(buildChatRequest(input.payload)),
+  });
 
   if (!response.ok) {
     throw new ApiError(`Request failed: ${response.status}`, response.status, {

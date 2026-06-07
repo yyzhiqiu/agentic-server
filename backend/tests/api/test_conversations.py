@@ -21,11 +21,13 @@ class InMemoryConversationService:
 
     async def create(self, payload: ConversationCreate, user_id: str) -> ConversationRead:
         conversation_id = f"conversation-{len(self.items) + 1}"
+        agent_id = payload.agent_id or payload.metadata.get("agent_id") or "chat_agent"
         conversation = ConversationRead(
             id=conversation_id,
             title=payload.title,
             user_id=user_id,
-            metadata=payload.metadata,
+            agent_id=agent_id,
+            metadata={**payload.metadata, "agent_id": agent_id},
         )
         self.items[conversation_id] = conversation
         self.messages[conversation_id] = [
@@ -117,12 +119,16 @@ def message_service(
 
 
 def test_create_conversation_endpoint(client, conversation_service: InMemoryConversationService) -> None:
-    response = client.post("/v1/conversations", json={"title": "Demo Conversation"})
+    response = client.post(
+        "/v1/conversations",
+        json={"title": "Demo Conversation", "agent_id": "code_agent"},
+    )
     assert response.status_code == 200
     payload = response.json()
     assert payload["success"] is True
     assert payload["data"]["id"] == "conversation-1"
     assert payload["data"]["title"] == "Demo Conversation"
+    assert payload["data"]["agent_id"] == "code_agent"
 
 
 def test_list_and_get_conversation_endpoints(
@@ -130,7 +136,10 @@ def test_list_and_get_conversation_endpoints(
     conversation_service: InMemoryConversationService,
     message_service: InMemoryMessageService,
 ) -> None:
-    created = client.post("/v1/conversations", json={"title": "Demo Conversation"})
+    created = client.post(
+        "/v1/conversations",
+        json={"title": "Demo Conversation", "agent_id": "chat_agent"},
+    )
     conversation_id = created.json()["data"]["id"]
 
     list_response = client.get("/v1/conversations")
@@ -139,6 +148,7 @@ def test_list_and_get_conversation_endpoints(
     assert list_payload["success"] is True
     assert list_payload["data"]["total"] == 1
     assert list_payload["data"]["items"][0]["id"] == conversation_id
+    assert list_payload["data"]["items"][0]["agent_id"] == "chat_agent"
 
     get_response = client.get(f"/v1/conversations/{conversation_id}")
     assert get_response.status_code == 200
@@ -163,7 +173,10 @@ def test_delete_conversation_endpoint(
     client,
     conversation_service: InMemoryConversationService,
 ) -> None:
-    created = client.post("/v1/conversations", json={"title": "Demo Conversation"})
+    created = client.post(
+        "/v1/conversations",
+        json={"title": "Demo Conversation", "agent_id": "chat_agent"},
+    )
     conversation_id = created.json()["data"]["id"]
 
     response = client.delete(f"/v1/conversations/{conversation_id}")

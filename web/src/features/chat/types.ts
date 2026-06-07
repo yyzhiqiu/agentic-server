@@ -13,6 +13,9 @@ export type ChatRequest = {
   conversationId?: string;
   userId?: string;
   metadata?: Record<string, unknown>;
+  repositoryContext?: Record<string, unknown>;
+  changedFiles?: string[];
+  taskType?: string | null;
 };
 
 export type ChatToolCall = {
@@ -25,6 +28,7 @@ export type ChatToolCall = {
 
 export type ChatResponse = {
   conversationId: string | null;
+  agentId: string | null;
   message: ChatMessage;
   messages: ChatMessage[];
   metadata: Record<string, unknown>;
@@ -34,4 +38,5 @@ export type ChatResponse = {
 export type ChatStreamMeta = {
   conversationId: string | null;
   runId: string | null;
+  agentId: string | null;
 };

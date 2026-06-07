@@ -1,3 +1,9 @@
+"""FastAPI 应用生命周期资源管理模块。
+
+本模块负责在启动阶段初始化应用级共享资源，包括 LLM、Redis、HTTP Client、
+对象存储、Langfuse，以及多 Agent graph 注册表。它不处理任何请求级业务逻辑。
+"""
+
 from __future__ import annotations
 
 import logging
@@ -6,7 +12,10 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 
-from app.graph.builder import build_graph
+from app.graph.default import DEFAULT_AGENT_ID
+from app.graph.registry import build_agent_registry
+from app.graph.checkpoint import create_checkpointer
+from app.graph.store import create_store
 from app.integrations.http_client import close_http_client, create_http_client
 from app.integrations.object_storage import create_object_storage
 from app.integrations.redis import close_redis_client, create_redis_client
@@ -27,7 +36,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.http_client = create_http_client()
     app.state.object_storage = create_object_storage()
     app.state.llm = create_llm()
-    app.state.graph = build_graph(app.state.llm)
+    app.state.agent_checkpointer = create_checkpointer()
+    app.state.agent_store = create_store()
+    app.state.agent_registry = build_agent_registry(
+        llm=app.state.llm,
+        checkpointer=app.state.agent_checkpointer,
+        store=app.state.agent_store,
+    )
+    app.state.graph = app.state.agent_registry[DEFAULT_AGENT_ID].graph
+
+    print(app.state.graph.get_graph().draw_mermaid())
+
     app.state.langfuse = create_langfuse_client()
     try:
         yield

@@ -13,6 +13,7 @@ export type ConversationListItem = {
   id: string;
   title: string | null;
   userId: string | null;
+  agentId: string | null;
   metadata: ConversationMetadata;
   createdAt: string | null;
 };

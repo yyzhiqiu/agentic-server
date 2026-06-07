@@ -1,3 +1,5 @@
+"""会话 ORM 模型。"""
+
 from __future__ import annotations
 
 from sqlalchemy import ForeignKey, JSON, String
@@ -17,6 +19,12 @@ class Conversation(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
         ForeignKey("users.id"),
         nullable=True,
         comment="所属用户 ID。",
+    )
+    agent_id: Mapped[str] = mapped_column(
+        String(100),
+        default="chat_agent",
+        nullable=False,
+        comment="绑定的智能体 ID。",
     )
     title: Mapped[str | None] = mapped_column(
         String(255),

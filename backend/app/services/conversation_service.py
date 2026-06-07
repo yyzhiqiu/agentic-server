@@ -1,17 +1,13 @@
-"""会话业务编排服务。
-
-本服务为 API 层协调会话的增删改查行为，负责写操作的事务边界、
-删除类动作的尽力而为审计记录，并把所有数据库访问委托给 Repository 层。
-"""
+"""会话业务编排服务。"""
 
 from __future__ import annotations
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.enums import AuditAction, AuditResult
 from app.audit.schemas import AuditEvent
 from app.audit.service import AuditService
 from app.common.context import get_trace_id
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.common.error_codes import ErrorCode
 from app.common.exceptions import AppException
 from app.db.models.conversation import Conversation
@@ -19,6 +15,7 @@ from app.db.models.message import Message
 from app.db.repositories.conversation_repo import ConversationRepository
 from app.db.repositories.message_repo import MessageRepository
 from app.db.transaction import transaction
+from app.graph.default import DEFAULT_AGENT_ID
 from app.schemas.conversation import (
     ConversationCreate,
     ConversationDetail,
@@ -30,11 +27,7 @@ from app.services.user_service import UserService
 
 
 class ConversationService:
-    """编排当前用户的会话增删改查操作。
-
-    本服务负责控制写操作的事务边界，并将 ORM 实体转换为响应 Schema。
-    Repository 层内部不主动提交事务。
-    """
+    """编排当前用户的会话增删改查操作。"""
 
     def __init__(
         self,
@@ -52,13 +45,27 @@ class ConversationService:
         self.audit_service = audit_service or AuditService()
 
     @staticmethod
-    def _to_read(conversation: Conversation) -> ConversationRead:
+    def _agent_id(conversation: Conversation) -> str:
+        """从一等字段或兼容元数据中提取绑定的 Agent 标识。"""
+
+        if isinstance(conversation.agent_id, str) and conversation.agent_id:
+            return conversation.agent_id
+
+        metadata = dict(conversation.metadata_ or {})
+        agent_id = metadata.get("agent_id")
+        if isinstance(agent_id, str) and agent_id:
+            return agent_id
+        return DEFAULT_AGENT_ID
+
+    @classmethod
+    def _to_read(cls, conversation: Conversation) -> ConversationRead:
         """将会话 ORM 实体映射为 API 响应 Schema。"""
 
         return ConversationRead(
             id=conversation.id,
             title=conversation.title,
             user_id=conversation.user_id,
+            agent_id=cls._agent_id(conversation),
             metadata=dict(conversation.metadata_ or {}),
             created_at=conversation.created_at,
         )
@@ -78,27 +85,20 @@ class ConversationService:
         )
 
     async def create(self, payload: ConversationCreate, user_id: str) -> ConversationRead:
-        """为当前用户创建会话。
-
-        参数：
-            payload: 用于初始化会话的请求数据。
-            user_id: 新会话的拥有者 ID。
-
-        返回：
-            已持久化的会话响应数据。
-
-        副作用：
-            会在 Service 层管理的事务中向 conversations 表写入新记录。
-        """
+        """为当前用户创建会话。"""
 
         if self.user_service is not None:
             await self.user_service.ensure_user(user_id, name=user_id)
 
         async with transaction(self.session):
+            metadata = dict(payload.metadata)
+            agent_id = payload.agent_id or metadata.get("agent_id") or DEFAULT_AGENT_ID
+            metadata.setdefault("agent_id", agent_id)
             conversation = Conversation(
                 user_id=user_id,
+                agent_id=agent_id,
                 title=payload.title,
-                metadata_=dict(payload.metadata),
+                metadata_=metadata,
             )
             created = await self.conversation_repository.add(conversation)
         return self._to_read(created)
@@ -124,11 +124,7 @@ class ConversationService:
         )
 
     async def get(self, conversation_id: str, user_id: str) -> ConversationDetail:
-        """获取当前用户拥有的单个会话。
-
-        异常：
-            AppException: 当会话不存在，或不属于当前用户时抛出。
-        """
+        """获取当前用户拥有的单个会话。"""
 
         conversation = await self.conversation_repository.get_by_id_for_user(
             conversation_id,
@@ -156,11 +152,7 @@ class ConversationService:
         )
 
     async def delete(self, conversation_id: str, user_id: str) -> dict[str, str]:
-        """软删除当前用户拥有的会话。
-
-        副作用：
-            会将会话标记为已删除，并在写入成功后尽力记录一条审计事件。
-        """
+        """软删除当前用户拥有的会话。"""
 
         conversation = await self.conversation_repository.get_by_id_for_user(
             conversation_id,
@@ -182,6 +174,7 @@ class ConversationService:
                 result=AuditResult.SUCCESS,
                 actor_id=user_id,
                 trace_id=get_trace_id(),
+                agent_id=self._agent_id(conversation),
                 resource_type="conversation",
                 resource_id=conversation_id,
                 metadata={"status": "deleted"},

@@ -26,12 +26,14 @@ class _FakeConversation:
         *,
         id: str,
         user_id: str,
+        agent_id: str,
         title: str | None,
         metadata_: dict,
         created_at: datetime | None = None,
     ) -> None:
         self.id = id
         self.user_id = user_id
+        self.agent_id = agent_id
         self.title = title
         self.metadata_ = metadata_
         self.created_at = created_at or datetime.now(timezone.utc)
@@ -122,10 +124,14 @@ async def test_conversation_service_crud_scaffold() -> None:
         audit_service=AuditService(writer=audit_writer),
     )
 
-    created = await service.create(ConversationCreate(title="demo"), "user-1")
+    created = await service.create(
+        ConversationCreate(title="demo", agent_id="code_agent"),
+        "user-1",
+    )
     assert created.id == "conversation-1"
     assert created.title == "demo"
     assert created.user_id == "user-1"
+    assert created.agent_id == "code_agent"
 
     listed = await service.list("user-1")
     assert listed.total == 1
@@ -159,6 +165,7 @@ async def test_conversation_service_crud_scaffold() -> None:
     assert audit_writer.events[0].action == AuditAction.DELETE
     assert audit_writer.events[0].result == AuditResult.SUCCESS
     assert audit_writer.events[0].resource_id == created.id
+    assert audit_writer.events[0].agent_id == "code_agent"
 
     listed_after_delete = await service.list("user-1")
     assert listed_after_delete.total == 0

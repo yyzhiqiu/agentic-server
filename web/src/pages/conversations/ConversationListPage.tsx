@@ -12,6 +12,13 @@ import { GUEST_USER_LABEL } from "@/shared/constants/app";
 import { ROUTES } from "@/shared/constants/routes";
 import { formatDate } from "@/shared/lib/date";
 
+function buildContinueUrl(conversationId: string, agentId: string | null) {
+  const params = new URLSearchParams();
+  params.set("conversationId", conversationId);
+  params.set("agentId", agentId ?? "chat_agent");
+  return `${ROUTES.chat}?${params.toString()}`;
+}
+
 export function ConversationListPage() {
   const navigate = useNavigate();
   const conversationsQuery = useConversations();
@@ -27,7 +34,7 @@ export function ConversationListPage() {
           </p>
           <h1 className="mt-2 text-3xl font-semibold text-slate-900">会话列表</h1>
           <p className="mt-2 max-w-3xl text-sm text-slate-600">
-            这里展示已持久化的历史会话，并保留搜索、分页和筛选等扩展空间。
+            这里展示已持久化的历史会话，并保留继续对话、详情查看和后续筛选扩展空间。
           </p>
         </div>
         <Button
@@ -74,7 +81,7 @@ export function ConversationListPage() {
       {!conversationsQuery.isLoading && !conversationsQuery.isError && total === 0 ? (
         <EmptyState
           title="还没有历史会话"
-          description="会话列表接口已经接通。创建新对话后，这里会展示可直接查看的历史会话。"
+          description="创建新对话后，这里会展示可继续追踪和恢复的历史会话。"
         />
       ) : null}
 
@@ -91,10 +98,10 @@ export function ConversationListPage() {
                     会话 ID: {conversation.id}
                   </p>
                 </div>
-                <Badge>历史会话</Badge>
+                <Badge>{conversation.agentId ?? "chat_agent"}</Badge>
               </div>
 
-              <div className="grid gap-3 text-sm text-slate-600 md:grid-cols-2">
+              <div className="grid gap-3 text-sm text-slate-600 md:grid-cols-3">
                 <div>
                   <p className="text-xs uppercase tracking-[0.16em] text-slate-400">
                     创建时间
@@ -113,9 +120,26 @@ export function ConversationListPage() {
                     {conversation.userId ?? GUEST_USER_LABEL}
                   </p>
                 </div>
+                <div>
+                  <p className="text-xs uppercase tracking-[0.16em] text-slate-400">
+                    绑定 Agent
+                  </p>
+                  <p className="mt-1 break-all text-slate-700">
+                    {conversation.agentId ?? "chat_agent"}
+                  </p>
+                </div>
               </div>
 
-              <div className="flex justify-end">
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    navigate(buildContinueUrl(conversation.id, conversation.agentId));
+                  }}
+                >
+                  继续对话
+                </Button>
                 <Button
                   size="sm"
                   onClick={() => {

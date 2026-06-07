@@ -1,8 +1,4 @@
-"""审计写入器实现。
-
-本模块定义可插拔的审计写入协议，并提供基于数据库的默认实现。
-写入逻辑只负责审计落库，不承担主业务事务编排职责。
-"""
+"""审计写入器实现。"""
 
 from __future__ import annotations
 
@@ -33,6 +29,9 @@ class DatabaseAuditWriter:
         """通过 Repository 层写入一条审计记录。"""
 
         repo = AuditLogRepository(self.session)
+        metadata = dict(event.metadata)
+        if event.agent_id is not None:
+            metadata.setdefault("agent_id", event.agent_id)
         await repo.add(
             AuditLog(
                 action=event.action.value,
@@ -41,17 +40,12 @@ class DatabaseAuditWriter:
                 trace_id=event.trace_id,
                 resource_type=event.resource_type,
                 resource_id=event.resource_id,
-                metadata_=event.metadata,
+                metadata_=metadata,
             )
         )
 
     async def write(self, event: AuditEvent) -> None:
-        """在安全的事务边界内持久化审计事件。
-
-        写入器可能在主业务事务已经结束后被调用，因此需要在必要时自行开启事务。
-        如果调用方已经持有活动事务，则复用现有事务，避免再次嵌套
-        ``session.begin()`` 事务块。
-        """
+        """在安全的事务边界内持久化审计事件。"""
 
         async with transaction(self.session):
             await self._write_with_repository(event)

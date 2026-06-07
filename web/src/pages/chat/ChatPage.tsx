@@ -1,17 +1,23 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
-import { streamChat } from "@/features/chat/api";
+import { useAgents } from "@/features/agents/hooks";
+import { streamAgentChat } from "@/features/chat/api";
 import { useChat } from "@/features/chat/hooks";
 import type { ChatMessage as ApiChatMessage } from "@/features/chat/types";
+import { useConversationDetail } from "@/features/conversations/hooks";
 import { EmptyState } from "@/shared/components/feedback/EmptyState";
 import { ErrorState } from "@/shared/components/feedback/ErrorState";
 import { Button } from "@/shared/components/ui/button";
-import { ScrollArea } from "@/shared/components/ui/scroll-area";
-import { MessageList } from "@/pages/chat/components/MessageList";
-import { ChatInput } from "@/pages/chat/components/ChatInput";
-import { StreamMessage } from "@/pages/chat/components/StreamMessage";
 import { Card } from "@/shared/components/ui/card";
+import { ScrollArea } from "@/shared/components/ui/scroll-area";
 import { createId } from "@/shared/lib/id";
+import { ChatInput } from "@/pages/chat/components/ChatInput";
+import { AgentSelector } from "@/pages/chat/components/AgentSelector";
+import { MessageList } from "@/pages/chat/components/MessageList";
+import { StreamMessage } from "@/pages/chat/components/StreamMessage";
+
+const DEFAULT_AGENT_ID = "chat_agent";
 
 type RenderMessage = {
   id: string;
@@ -32,16 +38,114 @@ function readRunId(metadata: Record<string, unknown>) {
   return typeof runId === "string" && runId.length > 0 ? runId : null;
 }
 
+function selectDefaultAgentId(agentIds: string[]) {
+  if (agentIds.includes(DEFAULT_AGENT_ID)) {
+    return DEFAULT_AGENT_ID;
+  }
+  return agentIds[0] ?? DEFAULT_AGENT_ID;
+}
+
+function buildSearchParams(agentId: string, conversationId?: string | null) {
+  const params = new URLSearchParams();
+  params.set("agentId", agentId);
+  if (conversationId) {
+    params.set("conversationId", conversationId);
+  }
+  return params;
+}
+
 export function ChatPage() {
   const chatMutation = useChat();
+  const agentsQuery = useAgents();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const resumeConversationId = searchParams.get("conversationId");
+  const resumeAgentId = searchParams.get("agentId");
+  const conversationQuery = useConversationDetail(resumeConversationId ?? "");
+  const hydratedConversationIdRef = useRef<string | null>(null);
+
   const [draft, setDraft] = useState("");
   const [mode, setMode] = useState<"sync" | "stream">("sync");
-  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [selectedAgentId, setSelectedAgentId] = useState(
+    resumeAgentId ?? DEFAULT_AGENT_ID,
+  );
+  const [conversationId, setConversationId] = useState<string | null>(
+    resumeConversationId,
+  );
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ApiChatMessage[]>([]);
   const [streamContent, setStreamContent] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (resumeAgentId) {
+      setSelectedAgentId(resumeAgentId);
+      return;
+    }
+
+    const loadedAgents = agentsQuery.data ?? [];
+    if (loadedAgents.length === 0) {
+      return;
+    }
+
+    const loadedAgentIds = loadedAgents.map((agent) => agent.agentId);
+    if (!loadedAgentIds.includes(selectedAgentId)) {
+      setSelectedAgentId(selectDefaultAgentId(loadedAgentIds));
+    }
+  }, [agentsQuery.data, resumeAgentId, selectedAgentId]);
+
+  useEffect(() => {
+    if (!resumeConversationId) {
+      hydratedConversationIdRef.current = null;
+      return;
+    }
+
+    if (!conversationQuery.data) {
+      return;
+    }
+
+    if (hydratedConversationIdRef.current === conversationQuery.data.id) {
+      return;
+    }
+
+    hydratedConversationIdRef.current = conversationQuery.data.id;
+    setConversationId(conversationQuery.data.id);
+    setSelectedAgentId(conversationQuery.data.agentId ?? resumeAgentId ?? DEFAULT_AGENT_ID);
+    setMessages(
+      conversationQuery.data.messages.map((message) => ({
+        role:
+          message.role === "system" ||
+          message.role === "assistant" ||
+          message.role === "tool"
+            ? message.role
+            : "user",
+        content: message.content,
+        metadata: message.metadata,
+      })),
+    );
+    setCurrentRunId(null);
+    setStreamContent("");
+    setErrorMessage(null);
+  }, [conversationQuery.data, resumeAgentId, resumeConversationId]);
+
+  function startFreshConversation(nextAgentId: string) {
+    hydratedConversationIdRef.current = null;
+    setSelectedAgentId(nextAgentId);
+    setConversationId(null);
+    setCurrentRunId(null);
+    setMessages([]);
+    setStreamContent("");
+    setStreaming(false);
+    setErrorMessage(null);
+    setDraft("");
+    setSearchParams(buildSearchParams(nextAgentId), { replace: true });
+  }
+
+  function rememberConversation(nextAgentId: string, nextConversationId: string | null) {
+    setSearchParams(buildSearchParams(nextAgentId, nextConversationId), {
+      replace: true,
+    });
+  }
 
   async function handleSyncSubmit() {
     const content = draft.trim();
@@ -65,15 +169,21 @@ export function ChatPage() {
 
     try {
       const response = await chatMutation.mutateAsync({
-        messages: nextMessages,
-        conversationId: conversationId ?? undefined,
+        agentId: selectedAgentId,
+        payload: {
+          messages: nextMessages,
+          conversationId: conversationId ?? undefined,
+          taskType: selectedAgentId === "code_agent" ? "code_assist" : undefined,
+        },
       });
 
+      const nextConversationId = response.conversationId ?? conversationId;
       setMessages(response.messages.length > 0 ? response.messages : nextMessages);
-      if (response.conversationId) {
-        setConversationId(response.conversationId);
+      if (nextConversationId) {
+        setConversationId(nextConversationId);
       }
       setCurrentRunId(readRunId(response.metadata));
+      rememberConversation(selectedAgentId, nextConversationId);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "聊天请求失败");
     }
@@ -101,32 +211,40 @@ export function ChatPage() {
     setStreaming(true);
 
     try {
-      await streamChat(
+      await streamAgentChat(
         {
-          messages: nextMessages,
-          conversationId: conversationId ?? undefined,
+          agentId: selectedAgentId,
+          payload: {
+            messages: nextMessages,
+            conversationId: conversationId ?? undefined,
+            taskType: selectedAgentId === "code_agent" ? "code_assist" : undefined,
+          },
         },
         {
           onStart: (meta) => {
-            if (meta.conversationId) {
-              setConversationId(meta.conversationId);
+            const nextConversationId = meta.conversationId ?? conversationId;
+            if (nextConversationId) {
+              setConversationId(nextConversationId);
             }
             if (meta.runId) {
               setCurrentRunId(meta.runId);
             }
+            rememberConversation(meta.agentId ?? selectedAgentId, nextConversationId);
           },
           onMessage: (contentChunk) => {
             setStreamContent(contentChunk);
           },
           onDone: (response) => {
+            const nextConversationId = response.conversationId ?? conversationId;
             setMessages(
               response.messages.length > 0 ? response.messages : nextMessages,
             );
-            if (response.conversationId) {
-              setConversationId(response.conversationId);
+            if (nextConversationId) {
+              setConversationId(nextConversationId);
             }
             setCurrentRunId(readRunId(response.metadata));
             setStreamContent("");
+            rememberConversation(response.agentId ?? selectedAgentId, nextConversationId);
           },
           onError: (error) => {
             setErrorMessage(error.message);
@@ -157,11 +275,41 @@ export function ChatPage() {
           Agent 对话工作台
         </h1>
         <p className="mt-2 max-w-3xl text-sm text-slate-600">
-          支持同步对话与流式响应两种模式，可在消息区查看回复内容、会话标识与最近一次运行信息。
+          支持两个独立智能体、历史会话继续对话，以及同步和流式两种交互模式。
         </p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
+      <AgentSelector
+        agents={agentsQuery.data ?? []}
+        selectedAgentId={selectedAgentId}
+        disabled={isSubmitting}
+        loading={agentsQuery.isLoading}
+        errorMessage={agentsQuery.isError ? agentsQuery.error.message : null}
+        onSelect={(agentId) => {
+          if (agentId === selectedAgentId && !resumeConversationId) {
+            return;
+          }
+          startFreshConversation(agentId);
+        }}
+      />
+
+      {resumeConversationId && conversationQuery.isLoading ? (
+        <Card>
+          <p className="text-sm text-slate-500">正在加载历史会话内容...</p>
+        </Card>
+      ) : null}
+
+      {resumeConversationId && conversationQuery.isError ? (
+        <ErrorState message={conversationQuery.error.message} />
+      ) : null}
+
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card>
+          <p className="text-sm text-slate-500">当前 Agent</p>
+          <p className="mt-3 break-all text-lg font-semibold text-slate-900">
+            {selectedAgentId}
+          </p>
+        </Card>
         <Card>
           <p className="text-sm text-slate-500">会话 ID</p>
           <p className="mt-3 break-all text-lg font-semibold text-slate-900">
@@ -185,33 +333,48 @@ export function ChatPage() {
       ) : null}
 
       <Card className="space-y-4">
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant={mode === "sync" ? "primary" : "secondary"}
-            size="sm"
-            onClick={() => {
-              setMode("sync");
-            }}
-            disabled={isSubmitting}
-          >
-            非流式
-          </Button>
-          <Button
-            variant={mode === "stream" ? "primary" : "secondary"}
-            size="sm"
-            onClick={() => {
-              setMode("stream");
-            }}
-            disabled={isSubmitting}
-          >
-            流式
-          </Button>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant={mode === "sync" ? "primary" : "secondary"}
+              size="sm"
+              onClick={() => {
+                setMode("sync");
+              }}
+              disabled={isSubmitting}
+            >
+              非流式
+            </Button>
+            <Button
+              variant={mode === "stream" ? "primary" : "secondary"}
+              size="sm"
+              onClick={() => {
+                setMode("stream");
+              }}
+              disabled={isSubmitting}
+            >
+              流式
+            </Button>
+          </div>
+
+          {conversationId ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={isSubmitting}
+              onClick={() => {
+                startFreshConversation(selectedAgentId);
+              }}
+            >
+              开启新会话
+            </Button>
+          ) : null}
         </div>
 
         {renderMessages.length === 0 ? (
           <EmptyState
             title="还没有对话消息"
-            description="输入一条消息后，这里会展示返回的消息历史。"
+            description="输入一条消息后，这里会展示当前智能体返回的完整消息历史。"
           />
         ) : (
           <ScrollArea className="max-h-[520px] pr-2">
@@ -239,7 +402,7 @@ export function ChatPage() {
             }
             void handleSyncSubmit();
           }}
-          disabled={false}
+          disabled={conversationQuery.isLoading}
           isSubmitting={isSubmitting}
           submitLabel={mode === "stream" ? "流式发送" : "发送"}
         />

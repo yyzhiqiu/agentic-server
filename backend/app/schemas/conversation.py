@@ -14,6 +14,7 @@ class ConversationCreate(BaseModel):
     """用于创建新会话的请求负载。"""
 
     title: str | None = None
+    agent_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -23,6 +24,7 @@ class ConversationRead(BaseModel):
     id: str
     title: str | None = None
     user_id: str | None = None
+    agent_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime | None = None
 

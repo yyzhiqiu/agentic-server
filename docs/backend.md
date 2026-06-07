@@ -19,6 +19,11 @@
 - Agent 控制与查询：`GET /v1/agent/runs`、`GET /v1/agent/runs/{run_id}`、`GET /v1/agent/status`、`POST /v1/agent/resume`、`POST /v1/agent/interrupt`
 `POST /v1/agent/resume` 与 `POST /v1/agent/interrupt` 的成功路径现在也会通过数据库 writer 写入 `audit_logs`，同时保持审计失败不影响主业务。
 - 聊天：`POST /v1/chat`、`POST /v1/chat/stream`
+- 多 Agent 查询与调用：`GET /v1/agents`、`GET /v1/agents/{agent_id}`、`POST /v1/agents/{agent_id}/chat`、`POST /v1/agents/{agent_id}/chat/stream`
+
+当前后端的 Agent 层采用 `Agent Registry + 多个独立 Graph` 结构，对外暴露 `chat_agent` 和 `code_agent` 两个独立能力。它们不是 supervisor 协作关系，也不做 handoff。
+`POST /v1/chat` 与 `POST /v1/chat/stream` 继续保留为兼容入口，默认分别等价于 `POST /v1/agents/chat_agent/chat` 与 `POST /v1/agents/chat_agent/chat/stream`。
+`conversations` 与 `agent_runs` 现在都已提供正式 `agent_id` 字段，`metadata.agent_id` 仅作为兼容旧数据和旧响应链路的兜底来源。
 
 其中 `POST /v1/chat` 已接入基础持久化流程，会在非流式调用中写入：
 
@@ -49,6 +54,7 @@
 - Repository 层只负责数据访问，不主动 `commit`
 - Graph 层只负责 Agent 编排，不直接依赖 HTTP 请求对象
 - Graph、LLM、Redis、HTTP Client、Langfuse 等应用级资源在启动阶段初始化
+- Agent graph 通过 registry 在启动阶段统一编译，不在请求期间重复 build
 
 ## 启动与迁移
 

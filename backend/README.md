@@ -10,6 +10,10 @@
 - `GET /ready`
 - `GET /v1/agent/runs`
 - `GET /v1/agent/runs/{run_id}`
+- `GET /v1/agents`
+- `GET /v1/agents/{agent_id}`
+- `POST /v1/agents/{agent_id}/chat`
+- `POST /v1/agents/{agent_id}/chat/stream`
 - `POST /v1/chat`
 - `POST /v1/chat/stream`
 - `GET /v1/agent/status`
@@ -30,6 +34,9 @@
 
 - `conversations`：用户范围内的创建、查询、软删除，删除成功路径会写入 `audit_logs`。
 - `files`：上传元数据登记、列表查询、详情读取、下载与删除；列表接口返回 `{ items, total }` 分页结构，上传成功路径默认会把二进制内容写入本地对象存储、同步登记一条最小 `documents` 记录，并写入 `audit_logs`。删除会同时软删除文件元数据、软删除关联 `documents` 记录，并清理对象存储中的二进制内容。
+- 当前聊天能力采用 `Agent Registry + 多个独立 Graph` 结构，对外暴露 `chat_agent` 和 `code_agent` 两个独立能力，不使用 supervisor，也不使用 handoff。
+- `POST /v1/chat` 与 `POST /v1/chat/stream` 作为兼容入口保留，默认映射到 `chat_agent`。
+- `conversations` 与 `agent_runs` 现已将 `agent_id` 持久化为正式字段，`metadata.agent_id` 仅保留为兼容旧数据与旧链路时的兜底来源。
 - `documents`：已经具备一条最小可用的文档处理基础链路。上传文件后会先登记 `documents` 记录，随后可通过 `app.tasks.document_indexing.index_document()` 将文本类文件读取为规范化文本，并把 `documents.metadata.status` 与 `files.metadata.document_status` 更新为 `indexed`。
 - `agent`：轻量 Agent Run 状态写入、恢复、中断，以及运行记录列表/详情查询；`resume` / `interrupt` 成功路径现在也会写入 `audit_logs`。
 - `POST /v1/chat`：会话解析、消息写入、Agent Run 记录与审计事件，成功路径会通过数据库 writer 落库到 `audit_logs`。
@@ -64,7 +71,7 @@ backend/
 - `db/`：Session、Models、Repositories 与事务能力
 - `integrations/`：Redis、HTTP Client、缓存、锁等外部基础设施集成
 - `llms/`：模型工厂与降级策略
-- `graph/`：LangGraph 状态、节点、路由、提示词与工具
+- `graph/`：LangGraph 多 Agent registry、shared 公共能力，以及 `chat_agent` / `code_agent` 独立 graph
 - `services/`：业务编排与事务边界
 - `observability/`：Trace、Langfuse、日志上下文与指标预留
 - `audit/`：审计事件、服务与写入器

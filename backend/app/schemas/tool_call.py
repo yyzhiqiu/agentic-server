@@ -23,5 +23,6 @@ class ToolCallRead(ToolCallPayload):
 
     id: str
     agent_run_id: str | None = None
+    agent_id: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

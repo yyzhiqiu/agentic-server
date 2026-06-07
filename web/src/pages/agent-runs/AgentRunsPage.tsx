@@ -49,7 +49,7 @@ export function AgentRunsPage() {
             Agent 运行记录
           </h1>
           <p className="mt-2 max-w-3xl text-sm text-slate-600">
-            这里展示运行状态、耗时、trace 和详情入口，便于查看 Agent 执行历史。
+            这里展示运行状态、Agent、耗时、Trace 和详情入口，便于查看不同智能体的执行历史。
           </p>
         </div>
         <Button
@@ -102,7 +102,7 @@ export function AgentRunsPage() {
       {!runsQuery.isLoading && !runsQuery.isError && total === 0 ? (
         <EmptyState
           title="还没有运行记录"
-          description="运行记录接口已经接通。发起聊天或任务后，这里会展示每次 Agent 执行的历史记录。"
+          description="发起聊天或任务后，这里会展示每次 Agent 执行的历史记录。"
         />
       ) : null}
 
@@ -124,7 +124,15 @@ export function AgentRunsPage() {
                 </Badge>
               </div>
 
-              <div className="grid gap-3 text-sm text-slate-600 md:grid-cols-2 lg:grid-cols-4">
+              <div className="grid gap-3 text-sm text-slate-600 md:grid-cols-2 lg:grid-cols-5">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.16em] text-slate-400">
+                    Agent
+                  </p>
+                  <p className="mt-1 break-all text-slate-700">
+                    {run.agentId ?? "未知"}
+                  </p>
+                </div>
                 <div>
                   <p className="text-xs uppercase tracking-[0.16em] text-slate-400">
                     开始时间

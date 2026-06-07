@@ -5,9 +5,40 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
 
+from app.schemas.chat import ChatRequest, ChatResponse
 from app.schemas.tool_call import ToolCallRead
+
+
+class AgentMetadataResponse(BaseModel):
+    """对外暴露的 Agent 元信息响应。"""
+
+    agent_id: str
+    name: str
+    description: str
+    version: str
+    capabilities: list[str] = Field(default_factory=list)
+
+
+class AgentListResponse(RootModel[list[AgentMetadataResponse]]):
+    """可用 Agent 元信息列表响应。"""
+
+
+class AgentChatRequest(ChatRequest):
+    """指定 Agent 的聊天请求。
+
+    在通用聊天结构之外，显式暴露代码类 Agent 常见的上下文字段，
+    避免继续依赖 ``metadata`` 中的隐式约定。
+    """
+
+    repository_context: dict[str, Any] = Field(default_factory=dict)
+    changed_files: list[str] = Field(default_factory=list)
+    task_type: str | None = None
+
+
+class AgentChatResponse(ChatResponse):
+    """指定 Agent 的聊天响应。"""
 
 
 class AgentStatus(BaseModel):
@@ -15,6 +46,7 @@ class AgentStatus(BaseModel):
 
     status: Literal["idle", "running", "interrupted", "completed", "failed"] = "idle"
     run_id: str | None = None
+    agent_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -23,6 +55,7 @@ class AgentRunListItem(BaseModel):
 
     id: str
     conversation_id: str | None = None
+    agent_id: str | None = None
     status: Literal["running", "interrupted", "completed", "failed", "created"] = "created"
     started_at: datetime | None = None
     updated_at: datetime | None = None
@@ -54,6 +87,7 @@ class AgentResumeRequest(BaseModel):
     """用于将运行记录标记为恢复执行的请求负载。"""
 
     run_id: str
+    agent_id: str | None = None
     input: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -61,4 +95,5 @@ class AgentInterruptRequest(BaseModel):
     """用于将运行记录标记为中断的请求负载。"""
 
     run_id: str
+    agent_id: str | None = None
     reason: str | None = None

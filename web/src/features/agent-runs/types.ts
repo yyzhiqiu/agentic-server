@@ -8,6 +8,7 @@ export type AgentRunStatus =
 export type AgentRunToolCall = {
   id: string;
   agentRunId: string | null;
+  agentId: string | null;
   toolName: string;
   status: string;
   input: Record<string, unknown>;
@@ -20,6 +21,7 @@ export type AgentRunToolCall = {
 export type AgentRunListItem = {
   id: string;
   conversationId: string | null;
+  agentId: string | null;
   status: AgentRunStatus;
   startedAt: string | null;
   updatedAt: string | null;

@@ -25,7 +25,10 @@ from app.db.repositories.message_repo import MessageRepository
 from app.db.repositories.tool_call_repo import ToolCallRepository
 from app.db.repositories.user_repo import UserRepository
 from app.db.session import get_db_session as db_session_dependency
+from app.graph.default import DEFAULT_AGENT_ID
+from app.graph.types import AgentDefinition, AgentRegistry
 from app.integrations.object_storage import ObjectStorage
+from app.services.agent_service import AgentService
 from app.services.agent_run_service import AgentRunService
 from app.services.chat_service import ChatService
 from app.services.conversation_service import ConversationService
@@ -52,10 +55,42 @@ def get_redis(request: Request) -> Any | None:
     return getattr(request.app.state, "redis", None)
 
 
-def get_graph(request: Request) -> Any:
-    """返回 ``app.state`` 中预先构建好的 LangGraph 实例。"""
+def get_agent_registry(request: Request) -> AgentRegistry:
+    """返回启动阶段构建并缓存在 ``app.state`` 上的 Agent 注册表。"""
 
-    return request.app.state.graph
+    return request.app.state.agent_registry
+
+
+def get_agent_service(
+    agent_registry: AgentRegistry = Depends(get_agent_registry),
+) -> AgentService:
+    """基于启动期缓存的注册表构建轻量 Agent 服务。"""
+
+    return AgentService(agent_registry=agent_registry)
+
+
+def get_agent_definition(
+    agent_id: str = DEFAULT_AGENT_ID,
+    agent_service: AgentService = Depends(get_agent_service),
+) -> AgentDefinition:
+    """解析当前请求要使用的 Agent 定义。
+
+    当路由中不存在 ``agent_id`` 路径参数时，自动回落到默认 ``chat_agent``。
+    """
+
+    return agent_service.get_definition(agent_id)
+
+
+def get_graph(
+    agent_definition: AgentDefinition = Depends(get_agent_definition),
+) -> Any:
+    """返回当前请求对应的已编译 LangGraph 实例。
+
+    对于兼容路由，这里会返回默认 ``chat_agent`` 的 graph；
+    对于 ``/v1/agents/{agent_id}/...`` 路由，则返回指定 Agent 的 graph。
+    """
+
+    return agent_definition.graph
 
 
 def get_llm(request: Request) -> Any | None:
@@ -77,12 +112,14 @@ def get_object_storage(request: Request) -> ObjectStorage:
 
 
 def get_graph_runner(
-    graph: Any = Depends(get_graph),
-    llm: Any | None = Depends(get_llm),
+    agent_definition: AgentDefinition = Depends(get_agent_definition),
 ) -> GraphRunner:
     """基于启动期初始化的资源构建请求级 ``GraphRunner``。"""
 
-    return GraphRunner(graph, llm_available=llm is not None)
+    return GraphRunner(
+        agent_definition.graph,
+        agent_id=agent_definition.metadata.agent_id,
+    )
 
 
 async def get_user_service(
@@ -99,6 +136,7 @@ async def get_user_service(
 async def get_chat_service(
     session: AsyncSession = Depends(get_db_session),
     graph_runner: GraphRunner = Depends(get_graph_runner),
+    agent_definition: AgentDefinition = Depends(get_agent_definition),
     user_service: UserService = Depends(get_user_service),
 ) -> ChatService:
     """为当前请求构建聊天服务。"""
@@ -110,6 +148,7 @@ async def get_chat_service(
         message_repository=MessageRepository(session),
         agent_run_repository=AgentRunRepository(session),
         user_service=user_service,
+        agent_id=agent_definition.metadata.agent_id,
         tool_call_service=ToolCallService(
             tool_call_repository=ToolCallRepository(session),
         ),

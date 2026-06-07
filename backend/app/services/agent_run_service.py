@@ -1,9 +1,4 @@
-"""Agent 运行记录业务编排服务。
-
-本服务负责协调 Agent 运行记录的轻量控制操作和用户范围读取能力，
-控制写操作事务边界，记录尽力而为的审计事件，并让 API 层不直接感知
-持久化细节。
-"""
+"""Agent 运行记录业务编排服务。"""
 
 from __future__ import annotations
 
@@ -21,6 +16,7 @@ from app.common.exceptions import AppException
 from app.db.models.agent_run import AgentRun
 from app.db.repositories.agent_run_repo import AgentRunRepository
 from app.db.transaction import transaction
+from app.graph.default import DEFAULT_AGENT_ID
 from app.schemas.agent import AgentRunDetail, AgentRunList, AgentRunListItem, AgentStatus
 from app.schemas.tool_call import ToolCallRead
 from app.services.tool_call_service import ToolCallService
@@ -48,18 +44,71 @@ class AgentRunService:
         self.audit_service = audit_service or AuditService()
 
     @staticmethod
+    def _agent_id(agent_run: AgentRun) -> str | None:
+        """从一等字段或兼容负载中提取 Agent 标识。"""
+
+        if isinstance(agent_run.agent_id, str) and agent_run.agent_id:
+            return agent_run.agent_id
+
+        metadata = dict(agent_run.metadata_ or {})
+        output = dict(agent_run.output or {})
+        candidates = [
+            metadata.get("agent_id"),
+            output.get("agent_id"),
+        ]
+        output_metadata = output.get("metadata")
+        if isinstance(output_metadata, dict):
+            candidates.append(output_metadata.get("agent_id"))
+
+        for candidate in candidates:
+            if isinstance(candidate, str) and candidate:
+                return candidate
+        return None
+
+    @staticmethod
+    def _resolve_agent_id(
+        *,
+        requested_agent_id: str | None = None,
+        payload: dict[str, Any] | None = None,
+        existing_run: AgentRun | None = None,
+    ) -> str:
+        """为运行记录写入可持久化的 Agent 标识。
+
+        优先级：
+        1. 显式请求参数中的 ``agent_id``
+        2. 输入载荷根字段或 ``metadata`` 中的 ``agent_id``
+        3. 已存在运行记录上的一等字段或兼容元数据
+        4. 默认 ``chat_agent``
+        """
+
+        candidates: list[Any] = [requested_agent_id]
+        payload_data = dict(payload or {})
+        candidates.append(payload_data.get("agent_id"))
+        payload_metadata = payload_data.get("metadata")
+        if isinstance(payload_metadata, dict):
+            candidates.append(payload_metadata.get("agent_id"))
+        if existing_run is not None:
+            candidates.append(AgentRunService._agent_id(existing_run))
+
+        for candidate in candidates:
+            if isinstance(candidate, str) and candidate:
+                return candidate
+        return DEFAULT_AGENT_ID
+
+    @staticmethod
     def _to_status(agent_run: AgentRun) -> AgentStatus:
-        """将 Agent 运行 ORM 实体映射为 API 响应 Schema。"""
+        """将 Agent 运行 ORM 实体映射为状态响应。"""
 
         return AgentStatus(
             status=agent_run.status,
             run_id=agent_run.id,
+            agent_id=AgentRunService._agent_id(agent_run),
             metadata=dict(agent_run.metadata_ or {}),
         )
 
     @staticmethod
     def _to_list_item(agent_run: AgentRun) -> AgentRunListItem:
-        """将 Agent 运行 ORM 实体映射为列表项 Schema。"""
+        """将 Agent 运行 ORM 实体映射为列表项响应。"""
 
         metadata = dict(agent_run.metadata_ or {})
         output = dict(agent_run.output or {})
@@ -67,6 +116,7 @@ class AgentRunService:
         return AgentRunListItem(
             id=agent_run.id,
             conversation_id=agent_run.conversation_id,
+            agent_id=AgentRunService._agent_id(agent_run),
             status=agent_run.status,
             started_at=agent_run.created_at,
             updated_at=agent_run.updated_at,
@@ -80,11 +130,7 @@ class AgentRunService:
 
     @classmethod
     def _finished_at(cls, agent_run: AgentRun) -> datetime | None:
-        """在运行不再活跃时返回完成时间戳。
-
-        当前持久化模型只保存运行记录的最新状态，因此当运行进入终态后，
-        这里把 ``updated_at`` 视为最接近完成时间的可用标记。
-        """
+        """在运行进入终态后返回最接近完成时刻的时间。"""
 
         if agent_run.status not in cls.TERMINAL_STATUSES:
             return None
@@ -95,12 +141,7 @@ class AgentRunService:
         started_at: datetime | None,
         finished_at: datetime | None,
     ) -> int | None:
-        """计算以毫秒为单位的持久化时长摘要。
-
-        只有在终态时间可用时，API 才返回时长。
-        对于仍在运行的记录，这个字段保持为空，避免客户端把静态快照误判为
-        实时流逝计时器。
-        """
+        """计算以毫秒为单位的持久化时长摘要。"""
 
         if started_at is None or finished_at is None:
             return None
@@ -109,11 +150,7 @@ class AgentRunService:
 
     @staticmethod
     def _error_message(status: str, output: dict[str, Any]) -> str | None:
-        """仅在失败运行记录中返回失败消息。
-
-        持久化层会根据图执行结果保存不同形态的输出结构。
-        API 通过抽取统一失败消息字段来保持前端契约稳定。
-        """
+        """仅在失败运行中返回失败消息。"""
 
         if status != "failed":
             return None
@@ -122,7 +159,7 @@ class AgentRunService:
 
     @staticmethod
     def _error_code(status: str, output: dict[str, Any]) -> str | None:
-        """返回失败运行记录中持久化的项目错误码。"""
+        """返回失败运行记录中的错误码。"""
 
         if status != "failed":
             return None
@@ -131,7 +168,7 @@ class AgentRunService:
 
     @staticmethod
     def _interruption_reason(status: str, metadata: dict[str, Any]) -> str | None:
-        """仅在中断运行记录中返回中断原因。"""
+        """仅在中断运行中返回中断原因。"""
 
         if status != "interrupted":
             return None
@@ -145,7 +182,7 @@ class AgentRunService:
         *,
         tool_calls: list[ToolCallRead] | None = None,
     ) -> AgentRunDetail:
-        """将 Agent 运行 ORM 实体映射为详情 Schema。"""
+        """将 Agent 运行 ORM 实体映射为详情响应。"""
 
         list_item = cls._to_list_item(agent_run)
         return AgentRunDetail(
@@ -157,11 +194,7 @@ class AgentRunService:
         )
 
     async def status(self, run_id: str | None, user_id: str) -> AgentStatus:
-        """返回 Agent 运行记录的当前控制状态。
-
-        当运行记录尚未持久化时，API 仍返回非报错的 idle 状态，
-        让控制面板可以安全轮询。
-        """
+        """返回 Agent 运行记录的当前控制状态。"""
 
         if run_id is None:
             return AgentStatus(status="idle", run_id=None)
@@ -180,15 +213,7 @@ class AgentRunService:
         status: Literal["running", "interrupted", "completed", "failed", "created"] | None = None,
         conversation_id: str | None = None,
     ) -> AgentRunList:
-        """列出当前用户拥有的 Agent 运行记录。
-
-        参数：
-            user_id: 当前调用方，对应需要返回的运行记录拥有者。
-            limit: 最多返回的记录数。
-            offset: 返回结果前需要跳过的记录数。
-            status: 可选的运行状态过滤条件。
-            conversation_id: 可选的会话范围过滤条件。
-        """
+        """列出当前用户拥有的 Agent 运行记录。"""
 
         items = await self.agent_run_repository.list_by_user(
             user_id,
@@ -208,11 +233,7 @@ class AgentRunService:
         )
 
     async def get(self, run_id: str, user_id: str) -> AgentRunDetail:
-        """获取当前用户拥有的单条 Agent 运行记录。
-
-        异常：
-            AppException: 当运行记录不存在，或不属于当前用户时抛出。
-        """
+        """获取当前用户拥有的单条 Agent 运行记录。"""
 
         agent_run = await self.agent_run_repository.get_by_id_for_user(run_id, user_id)
         if agent_run is None:
@@ -226,21 +247,30 @@ class AgentRunService:
             tool_calls = await self.tool_call_service.list_for_run(run_id)
         return self._to_detail(agent_run, tool_calls=tool_calls)
 
-    async def resume(self, run_id: str, payload: dict[str, Any], user_id: str) -> AgentStatus:
-        """为当前用户创建或更新一条运行中状态的 Agent 运行记录。
-
-        副作用：
-            会持久化最新控制负载，并在运行状态写入成功后尽力记录审计事件。
-        """
+    async def resume(
+        self,
+        run_id: str,
+        payload: dict[str, Any],
+        user_id: str,
+        *,
+        agent_id: str | None = None,
+    ) -> AgentStatus:
+        """为当前用户创建或更新一条运行中状态的 Agent 运行记录。"""
 
         if self.user_service is not None:
             await self.user_service.ensure_user(user_id, name=user_id)
 
         async with transaction(self.session):
             agent_run = await self.agent_run_repository.get_by_id_for_user(run_id, user_id)
+            resolved_agent_id = self._resolve_agent_id(
+                requested_agent_id=agent_id,
+                payload=payload,
+                existing_run=agent_run,
+            )
             if agent_run is None:
                 agent_run = AgentRun(
                     id=run_id,
+                    agent_id=resolved_agent_id,
                     user_id=user_id,
                     status="running",
                     input=dict(payload),
@@ -249,6 +279,7 @@ class AgentRunService:
                 )
                 agent_run = await self.agent_run_repository.add(agent_run)
             else:
+                agent_run.agent_id = resolved_agent_id
                 agent_run.status = "running"
                 agent_run.input = dict(payload)
                 agent_run.metadata_ = dict(payload)
@@ -260,6 +291,7 @@ class AgentRunService:
                 result=AuditResult.SUCCESS,
                 actor_id=user_id,
                 trace_id=get_trace_id(),
+                agent_id=self._agent_id(agent_run),
                 resource_type="agent_run",
                 resource_id=run_id,
                 metadata={
@@ -270,12 +302,15 @@ class AgentRunService:
         )
         return self._to_status(agent_run)
 
-    async def interrupt(self, run_id: str, reason: str | None, user_id: str) -> AgentStatus:
-        """为当前用户创建或更新一条已中断状态的 Agent 运行记录。
-
-        副作用：
-            会持久化中断原因，并在运行状态写入成功后尽力记录审计事件。
-        """
+    async def interrupt(
+        self,
+        run_id: str,
+        reason: str | None,
+        user_id: str,
+        *,
+        agent_id: str | None = None,
+    ) -> AgentStatus:
+        """为当前用户创建或更新一条已中断状态的 Agent 运行记录。"""
 
         metadata = {"reason": reason} if reason is not None else {}
 
@@ -284,9 +319,14 @@ class AgentRunService:
 
         async with transaction(self.session):
             agent_run = await self.agent_run_repository.get_by_id_for_user(run_id, user_id)
+            resolved_agent_id = self._resolve_agent_id(
+                requested_agent_id=agent_id,
+                existing_run=agent_run,
+            )
             if agent_run is None:
                 agent_run = AgentRun(
                     id=run_id,
+                    agent_id=resolved_agent_id,
                     user_id=user_id,
                     status="interrupted",
                     input={},
@@ -295,6 +335,7 @@ class AgentRunService:
                 )
                 agent_run = await self.agent_run_repository.add(agent_run)
             else:
+                agent_run.agent_id = resolved_agent_id
                 agent_run.status = "interrupted"
                 agent_run.metadata_ = metadata
                 await self.session.flush()
@@ -305,6 +346,7 @@ class AgentRunService:
                 result=AuditResult.SUCCESS,
                 actor_id=user_id,
                 trace_id=get_trace_id(),
+                agent_id=self._agent_id(agent_run),
                 resource_type="agent_run",
                 resource_id=run_id,
                 metadata={

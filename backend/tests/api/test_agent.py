@@ -33,6 +33,7 @@ class InMemoryAgentRunService:
             AgentRunListItem(
                 id=detail.id,
                 conversation_id=detail.conversation_id,
+                agent_id=detail.agent_id,
                 status=detail.status,
                 started_at=detail.started_at,
                 updated_at=detail.updated_at,
@@ -58,12 +59,26 @@ class InMemoryAgentRunService:
             return AgentStatus(status="idle")
         return self.items.get(run_id, AgentStatus(status="idle", run_id=run_id))
 
-    async def resume(self, run_id: str, payload: dict[str, Any], user_id: str) -> AgentStatus:
-        status = AgentStatus(status="running", run_id=run_id, metadata=dict(payload))
+    async def resume(
+        self,
+        run_id: str,
+        payload: dict[str, Any],
+        user_id: str,
+        *,
+        agent_id: str | None = None,
+    ) -> AgentStatus:
+        resolved_agent_id = agent_id or payload.get("agent_id") or "chat_agent"
+        status = AgentStatus(
+            status="running",
+            run_id=run_id,
+            agent_id=resolved_agent_id,
+            metadata=dict(payload),
+        )
         self.items[run_id] = status
         self.details[run_id] = AgentRunDetail(
             id=run_id,
             conversation_id=None,
+            agent_id=resolved_agent_id,
             status="running",
             started_at=None,
             updated_at=None,
@@ -79,10 +94,18 @@ class InMemoryAgentRunService:
         )
         return status
 
-    async def interrupt(self, run_id: str, reason: str | None, user_id: str) -> AgentStatus:
+    async def interrupt(
+        self,
+        run_id: str,
+        reason: str | None,
+        user_id: str,
+        *,
+        agent_id: str | None = None,
+    ) -> AgentStatus:
         status = AgentStatus(
             status="interrupted",
             run_id=run_id,
+            agent_id=agent_id or self.items.get(run_id, AgentStatus()).agent_id,
             metadata={"reason": reason} if reason is not None else {},
         )
         self.items[run_id] = status
@@ -91,6 +114,7 @@ class InMemoryAgentRunService:
             AgentRunDetail(
                 id=run_id,
                 conversation_id=None,
+                agent_id=status.agent_id,
                 status="interrupted",
                 started_at=None,
                 updated_at=None,
@@ -108,6 +132,7 @@ class InMemoryAgentRunService:
         self.details[run_id] = existing.model_copy(
             update={
                 "status": "interrupted",
+                "agent_id": status.agent_id,
                 "metadata": {"reason": reason} if reason is not None else {},
                 "interruption_reason": reason,
             }
@@ -140,11 +165,16 @@ def test_agent_run_list_and_detail_endpoints(
 ) -> None:
     client.post(
         "/v1/agent/resume",
-        json={"run_id": "run-1", "input": {"trace_id": "trace-1", "approved": True}},
+        json={
+            "run_id": "run-1",
+            "agent_id": "code_agent",
+            "input": {"trace_id": "trace-1", "approved": True},
+        },
     )
     agent_run_service.details["run-1"] = agent_run_service.details["run-1"].model_copy(
         update={
             "conversation_id": "conversation-1",
+            "agent_id": "code_agent",
             "tool_calls": [
                 ToolCallRead(
                     id="tool-call-1",
@@ -162,6 +192,7 @@ def test_agent_run_list_and_detail_endpoints(
     agent_run_service.details["run-2"] = AgentRunDetail(
         id="run-2",
         conversation_id="conversation-2",
+        agent_id="chat_agent",
         status="failed",
         started_at=None,
         updated_at=None,
@@ -182,6 +213,7 @@ def test_agent_run_list_and_detail_endpoints(
     assert list_payload["success"] is True
     assert list_payload["data"]["total"] == 2
     assert list_payload["data"]["items"][0]["id"] == "run-1"
+    assert list_payload["data"]["items"][0]["agent_id"] == "code_agent"
     assert list_payload["data"]["items"][0]["trace_id"] == "trace-1"
 
     filtered_response = client.get(
@@ -199,6 +231,7 @@ def test_agent_run_list_and_detail_endpoints(
     detail_payload = detail_response.json()
     assert detail_payload["success"] is True
     assert detail_payload["data"]["id"] == "run-1"
+    assert detail_payload["data"]["agent_id"] == "code_agent"
     assert detail_payload["data"]["input"] == {"trace_id": "trace-1", "approved": True}
     assert detail_payload["data"]["finished_at"] is None
     assert detail_payload["data"]["duration_ms"] is None
@@ -208,12 +241,13 @@ def test_agent_run_list_and_detail_endpoints(
 def test_agent_resume_endpoint(client, agent_run_service: InMemoryAgentRunService) -> None:
     response = client.post(
         "/v1/agent/resume",
-        json={"run_id": "run-1", "input": {"approved": True}},
+        json={"run_id": "run-1", "agent_id": "code_agent", "input": {"approved": True}},
     )
     assert response.status_code == 200
     payload = response.json()
     assert payload["success"] is True
     assert payload["data"]["status"] == "running"
+    assert payload["data"]["agent_id"] == "code_agent"
     assert payload["data"]["metadata"] == {"approved": True}
 
     status_response = client.get("/v1/agent/status", params={"run_id": "run-1"})
@@ -223,12 +257,13 @@ def test_agent_resume_endpoint(client, agent_run_service: InMemoryAgentRunServic
 def test_agent_interrupt_endpoint(client, agent_run_service: InMemoryAgentRunService) -> None:
     response = client.post(
         "/v1/agent/interrupt",
-        json={"run_id": "run-1", "reason": "manual review"},
+        json={"run_id": "run-1", "agent_id": "chat_agent", "reason": "manual review"},
     )
     assert response.status_code == 200
     payload = response.json()
     assert payload["success"] is True
     assert payload["data"]["status"] == "interrupted"
+    assert payload["data"]["agent_id"] == "chat_agent"
     assert payload["data"]["metadata"]["reason"] == "manual review"
 
     detail_response = client.get("/v1/agent/runs/run-1")
