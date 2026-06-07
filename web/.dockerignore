@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.pnpm-store/
+.turbo/
+.idea/
+.vscode/
+.env
+.env.*
+!.env.example
+package-lock.json
+vite.config.js
+vite.config.d.ts
+tailwind.config.js
+tailwind.config.d.ts

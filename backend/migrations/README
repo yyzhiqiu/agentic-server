@@ -1,0 +1,7 @@
+Alembic migration environment for the backend service.
+
+alembic revision --autogenerate -m "description"：根据模型变化自动生成迁移脚本。
+
+alembic upgrade head：将数据库升级到最新的迁移版本。
+
+alembic downgrade -1：将数据库回滚上一个版本。

@@ -1,0 +1,21 @@
+{
+  "name": "agent-platform-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=18.18.0",
+    "pnpm": ">=9.15.0"
+  },
+  "scripts": {
+    "dev:web": "corepack pnpm --dir web dev",
+    "build:web": "corepack pnpm --dir web build",
+    "lint:web": "corepack pnpm --dir web lint",
+    "dev:backend": "cd backend && python run.py",
+    "test:backend": "cd backend && python -m pytest",
+    "check:env": "python scripts/check_env.py",
+    "compose:up": "cd deploy/compose && docker compose up --build",
+    "compose:dev": "cd deploy/compose && docker compose -f docker-compose.dev.yml up --build",
+    "compose:down": "cd deploy/compose && docker compose down"
+  }
+}
