@@ -36,6 +36,8 @@ agentic-server/
 6. 新增配置必须写入对应的 `.env.example`，并从环境变量读取。
 7. 修改目录结构时，必须同步更新 README、文档、启动命令和测试路径。
 8. 不要引入与当前技术栈冲突的框架或库。
+9. 新增或修改的注释信息统一使用中文，包括代码注释、docstring、数据库表/字段 `comment`、Alembic migration 注释；仅在外部协议、标准术语或原文引用必须保留英文时例外。
+10. 新增或修改的日志信息、错误提示、脚本输出默认使用中文；环境变量名、配置键、协议名、第三方产品名等必须保留英文的标识除外。
 
 ## 后端规则
 
@@ -65,6 +67,7 @@ backend/
 8. Service 层负责业务编排和事务边界。
 9. Repository 层只负责数据访问，不主动 commit。
 10. Graph 层只负责 Agent 编排，不直接依赖 HTTP 请求对象。
+11. 数据库表注释、字段 `comment` 以及对应 Alembic migration 中的注释统一使用中文。
 
 ## 前端规则
 
@@ -179,6 +182,7 @@ pnpm check:env
 * [ ] 新增配置是否写入 `.env.example`。
 * [ ] 后端 import 是否仍然使用 `app.xxx`。
 * [ ] Python docstring 是否符合 `skills/ai/python-commenting.md`。
+* [ ] 新增或修改的注释信息是否统一使用中文。
 * [ ] 后端是否仍可从 `backend/` 启动。
 * [ ] 前端是否仍可从 `web/` 启动。
 * [ ] README 或 docs 是否需要同步更新。

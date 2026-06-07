@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    logger.info("Starting application resources")
+    logger.info("=================启动应用资源=================")
     app.state.redis = await create_redis_client()
     app.state.http_client = create_http_client()
     app.state.object_storage = create_object_storage()
@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        logger.info("Closing application resources")
+        logger.info("=================关闭应用资源=================")
         await close_redis_client(getattr(app.state, "redis", None))
         await close_http_client(getattr(app.state, "http_client", None))
         langfuse_client = getattr(app.state, "langfuse", None)

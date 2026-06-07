@@ -21,7 +21,7 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
 
         response = await call_next(request)
         logger.info(
-            "audit method=%s path=%s status_code=%s trace_id=%s user_id=%s",
+            "审计日志 请求方法=%s 路径=%s 状态码=%s 链路ID=%s 用户ID=%s",
             request.method,
             request.url.path,
             response.status_code,

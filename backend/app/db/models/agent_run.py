@@ -8,11 +8,43 @@ from app.db.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 
 
 class AgentRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    __tablename__ = "agent_runs"
+    """智能体运行记录。"""
 
-    conversation_id: Mapped[str | None] = mapped_column(ForeignKey("conversations.id"), nullable=True)
-    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    status: Mapped[str] = mapped_column(String(50), default="created", nullable=False)
-    input: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
-    output: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
-    metadata_: Mapped[dict] = mapped_column("metadata", JSON, default=dict, nullable=False)
+    __tablename__ = "agent_runs"
+    __table_args__ = {"comment": "智能体运行记录。"}
+
+    conversation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("conversations.id"),
+        nullable=True,
+        comment="关联会话 ID。",
+    )
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=True,
+        comment="发起用户 ID。",
+    )
+    status: Mapped[str] = mapped_column(
+        String(50),
+        default="created",
+        nullable=False,
+        comment="当前运行状态。",
+    )
+    input: Mapped[dict] = mapped_column(
+        JSON,
+        default=dict,
+        nullable=False,
+        comment="序列化后的输入载荷。",
+    )
+    output: Mapped[dict] = mapped_column(
+        JSON,
+        default=dict,
+        nullable=False,
+        comment="序列化后的输出载荷。",
+    )
+    metadata_: Mapped[dict] = mapped_column(
+        "metadata",
+        JSON,
+        default=dict,
+        nullable=False,
+        comment="运行扩展元数据。",
+    )

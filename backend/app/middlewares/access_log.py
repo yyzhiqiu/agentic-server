@@ -16,7 +16,7 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         cost_ms = (time.perf_counter() - started_at) * 1000
         logger.info(
-            "request method=%s path=%s status_code=%s cost_ms=%.2f trace_id=%s",
+            "访问日志 请求方法=%s 路径=%s 状态码=%s 耗时毫秒=%.2f 链路ID=%s",
             request.method,
             request.url.path,
             response.status_code,

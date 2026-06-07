@@ -22,7 +22,7 @@ def check_path(path: Path, label: str) -> tuple[bool, str]:
     """
 
     exists = path.exists()
-    status = "OK" if exists else "MISSING"
+    status = "正常" if exists else "缺失"
     return exists, f"[{status}] {label}: {path}"
 
 
@@ -37,8 +37,8 @@ def check_command(command: str) -> tuple[bool, str]:
     """
 
     available = shutil.which(command) is not None
-    status = "OK" if available else "MISSING"
-    return available, f"[{status}] command: {command}"
+    status = "正常" if available else "缺失"
+    return available, f"[{status}] 命令: {command}"
 
 
 def main() -> int:
@@ -51,11 +51,11 @@ def main() -> int:
     root = Path(__file__).resolve().parents[1]
 
     checks = [
-        check_path(root / "backend" / "run.py", "backend entrypoint"),
-        check_path(root / "backend" / ".env.example", "backend env example"),
-        check_path(root / "web" / "package.json", "web package manifest"),
-        check_path(root / "web" / ".env.example", "web env example"),
-        check_path(root / "package.json", "workspace package manifest"),
+        check_path(root / "backend" / "run.py", "后端启动入口"),
+        check_path(root / "backend" / ".env.example", "后端环境变量示例"),
+        check_path(root / "web" / "package.json", "前端依赖清单"),
+        check_path(root / "web" / ".env.example", "前端环境变量示例"),
+        check_path(root / "package.json", "工作区依赖清单"),
         check_command("python"),
         check_command("pnpm"),
     ]

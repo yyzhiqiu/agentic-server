@@ -170,14 +170,14 @@ class FileService:
         except NotImplementedError as exc:
             raise AppException(
                 ErrorCode.SERVICE_UNAVAILABLE,
-                message="Object storage is not configured",
+                message="对象存储尚未配置",
                 status_code=503,
                 data={"filename": filename},
             ) from exc
         except (OSError, ValueError) as exc:
             raise AppException(
                 ErrorCode.INTERNAL_ERROR,
-                message="Failed to persist uploaded file",
+                message="持久化上传文件失败",
                 status_code=500,
                 data={"filename": filename, "error": str(exc)},
             ) from exc
@@ -282,7 +282,7 @@ class FileService:
         if not file.storage_key:
             raise AppException(
                 ErrorCode.NOT_FOUND,
-                message="Stored file content is not available",
+                message="文件存储内容不可用",
                 status_code=404,
                 data={"file_id": file_id},
             )
@@ -292,21 +292,21 @@ class FileService:
         except NotImplementedError as exc:
             raise AppException(
                 ErrorCode.SERVICE_UNAVAILABLE,
-                message="Object storage is not configured",
+                message="对象存储尚未配置",
                 status_code=503,
                 data={"file_id": file_id, "storage_key": file.storage_key},
             ) from exc
         except FileNotFoundError as exc:
             raise AppException(
                 ErrorCode.NOT_FOUND,
-                message="Stored file content is not available",
+                message="文件存储内容不可用",
                 status_code=404,
                 data={"file_id": file_id, "storage_key": file.storage_key},
             ) from exc
         except (OSError, ValueError) as exc:
             raise AppException(
                 ErrorCode.INTERNAL_ERROR,
-                message="Failed to read stored file",
+                message="读取已存储文件失败",
                 status_code=500,
                 data={"file_id": file_id, "storage_key": file.storage_key, "error": str(exc)},
             ) from exc
@@ -340,14 +340,14 @@ class FileService:
             except NotImplementedError as exc:
                 raise AppException(
                     ErrorCode.SERVICE_UNAVAILABLE,
-                    message="Object storage is not configured",
+                    message="对象存储尚未配置",
                     status_code=503,
                     data={"file_id": file_id, "storage_key": file.storage_key},
                 ) from exc
             except (OSError, ValueError) as exc:
                 raise AppException(
                     ErrorCode.INTERNAL_ERROR,
-                    message="Failed to delete stored file",
+                    message="删除已存储文件失败",
                     status_code=500,
                     data={"file_id": file_id, "storage_key": file.storage_key, "error": str(exc)},
                 ) from exc

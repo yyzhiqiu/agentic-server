@@ -55,7 +55,7 @@ class DocumentService:
         if document.file_id is None:
             raise AppException(
                 ErrorCode.NOT_FOUND,
-                message="Document is not linked to a file",
+                message="文档未关联文件",
                 status_code=404,
                 data={"document_id": document.id},
             )
@@ -79,7 +79,7 @@ class DocumentService:
         }:
             raise AppException(
                 ErrorCode.SERVICE_UNAVAILABLE,
-                message="Document parser is not configured for this file type",
+                message="当前文件类型尚未配置文档解析器",
                 status_code=503,
                 data={
                     "file_id": file.id,
@@ -92,7 +92,7 @@ class DocumentService:
         except UnicodeDecodeError as exc:
             raise AppException(
                 ErrorCode.SERVICE_UNAVAILABLE,
-                message="Document parser is not configured for non UTF-8 content",
+                message="非 UTF-8 内容尚未配置文档解析器",
                 status_code=503,
                 data={"file_id": file.id, "content_type": file.content_type},
             ) from exc
@@ -101,7 +101,7 @@ class DocumentService:
         if not normalized:
             raise AppException(
                 ErrorCode.REQUEST_VALIDATION_ERROR,
-                message="Document content is empty after normalization",
+                message="文档内容标准化后为空",
                 status_code=422,
                 data={"file_id": file.id},
             )
@@ -126,14 +126,14 @@ class DocumentService:
         if file is None:
             raise AppException(
                 ErrorCode.NOT_FOUND,
-                message="Linked file is not available",
+                message="关联文件不可用",
                 status_code=404,
                 data={"file_id": file_id},
             )
         if not file.storage_key:
             raise AppException(
                 ErrorCode.NOT_FOUND,
-                message="Stored file content is not available",
+                message="文件存储内容不可用",
                 status_code=404,
                 data={"file_id": file_id},
             )
@@ -158,14 +158,14 @@ class DocumentService:
         except NotImplementedError as exc:
             raise AppException(
                 ErrorCode.SERVICE_UNAVAILABLE,
-                message="Object storage is not configured",
+                message="对象存储尚未配置",
                 status_code=503,
                 data={"document_id": document_id, "file_id": file.id},
             ) from exc
         except FileNotFoundError as exc:
             raise AppException(
                 ErrorCode.NOT_FOUND,
-                message="Stored file content is not available",
+                message="文件存储内容不可用",
                 status_code=404,
                 data={"document_id": document_id, "file_id": file.id},
             ) from exc

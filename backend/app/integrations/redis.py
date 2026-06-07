@@ -16,7 +16,7 @@ async def create_redis_client() -> Any | None:
 
         return Redis.from_url(settings.REDIS_URL, decode_responses=True)
     except Exception:
-        logger.exception("Failed to initialize Redis client")
+        logger.exception("初始化 Redis 客户端失败")
         return None
 
 

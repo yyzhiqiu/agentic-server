@@ -16,17 +16,39 @@ def new_uuid() -> str:
 
 
 class UUIDPrimaryKeyMixin:
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    """为 ORM 模型提供 UUID 主键。"""
+
+    id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+        default=new_uuid,
+        comment="主键。",
+    )
 
 
 class TimestampMixin:
+    """为 ORM 模型提供创建与更新时间。"""
+
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, nullable=False
+        DateTime(timezone=True),
+        default=utc_now,
+        nullable=False,
+        comment="记录创建时间。",
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+        comment="记录最后更新时间。",
     )
 
 
 class SoftDeleteMixin:
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    """为 ORM 模型提供软删除时间。"""
+
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="软删除时间，空值表示记录有效。",
+    )

@@ -26,5 +26,5 @@ async def check_database_connection() -> bool:
             await connection.execute(text("SELECT 1"))
         return True
     except Exception:
-        logger.warning("Database readiness check failed", exc_info=True)
+        logger.warning("数据库就绪检查失败", exc_info=True)
         return False

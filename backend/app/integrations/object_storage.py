@@ -35,13 +35,13 @@ class NotConfiguredObjectStorage:
     backend_name = "disabled"
 
     async def put_object(self, key: str, data: bytes, content_type: str | None = None) -> str:
-        raise NotImplementedError("Object storage is not configured")
+        raise NotImplementedError("对象存储尚未配置")
 
     async def get_object(self, key: str) -> bytes:
-        raise NotImplementedError("Object storage is not configured")
+        raise NotImplementedError("对象存储尚未配置")
 
     async def delete_object(self, key: str) -> None:
-        raise NotImplementedError("Object storage is not configured")
+        raise NotImplementedError("对象存储尚未配置")
 
 
 class LocalObjectStorage:
@@ -57,7 +57,7 @@ class LocalObjectStorage:
 
         normalized_key = PurePosixPath(key)
         if normalized_key.is_absolute() or ".." in normalized_key.parts:
-            raise ValueError("Object storage key must stay within the storage root")
+            raise ValueError("对象存储键必须位于存储根目录内")
         return self.root.joinpath(*normalized_key.parts)
 
     async def put_object(self, key: str, data: bytes, content_type: str | None = None) -> str:

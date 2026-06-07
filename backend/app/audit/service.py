@@ -32,4 +32,4 @@ class AuditService:
         try:
             await self.writer.write(event)
         except Exception:
-            logger.warning("Failed to record audit event", exc_info=True)
+            logger.warning("记录审计事件失败", exc_info=True)

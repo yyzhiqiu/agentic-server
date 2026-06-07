@@ -8,9 +8,29 @@ from app.db.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 
 
 class ApiKey(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    __tablename__ = "api_keys"
+    """签发给用户的 API Key 记录。"""
 
-    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    name: Mapped[str] = mapped_column(String(100), nullable=False)
-    key_hash: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    expires_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    __tablename__ = "api_keys"
+    __table_args__ = {"comment": "签发给用户的 API Key 记录。"}
+
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id"),
+        nullable=True,
+        comment="所属用户 ID。",
+    )
+    name: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        comment="API Key 展示名称。",
+    )
+    key_hash: Mapped[str] = mapped_column(
+        String(255),
+        unique=True,
+        nullable=False,
+        comment="API Key 哈希值。",
+    )
+    expires_at: Mapped[DateTime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="API Key 过期时间。",
+    )

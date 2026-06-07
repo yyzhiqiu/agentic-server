@@ -47,7 +47,7 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def unknown_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-        logger.exception("Unhandled exception path=%s", request.url.path)
+        logger.exception("未处理异常，路径=%s", request.url.path)
         return JSONResponse(
             status_code=500,
             content=error_response(ErrorCode.INTERNAL_ERROR),
