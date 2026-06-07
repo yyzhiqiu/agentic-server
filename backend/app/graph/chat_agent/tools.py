@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from app.graph.shared.tools import calculator_tool, search_tool
+from langchain_core.tools import BaseTool
+
+from app.graph.shared.tools import calculator_tool, get_time, search_tool
 
 
-def get_chat_agent_tools() -> list:
+def get_chat_agent_tools() -> list[BaseTool]:
     """返回当前通用聊天 Agent 可用的共享工具列表。"""
 
-    return [search_tool, calculator_tool]
-
+    return [search_tool, calculator_tool, get_time]

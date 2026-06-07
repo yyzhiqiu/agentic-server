@@ -90,3 +90,21 @@ class AgentRunRepository(BaseRepository[AgentRun]):
             )
         )
         return result.scalar_one_or_none()
+
+    async def get_latest_by_conversation_for_user(
+        self,
+        conversation_id: str,
+        user_id: str,
+    ) -> AgentRun | None:
+        """返回指定用户在某个会话下最新创建的一条运行记录。"""
+
+        result = await self.session.execute(
+            select(AgentRun)
+            .where(
+                AgentRun.conversation_id == conversation_id,
+                AgentRun.user_id == user_id,
+            )
+            .order_by(AgentRun.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()

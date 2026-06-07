@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import pytest
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+from langchain_core.messages import AIMessage, HumanMessage
 
 from app.graph.chat_agent.builder import build_chat_agent
 from app.schemas.chat import ChatMessage, ChatRequest
@@ -14,14 +16,38 @@ async def test_graph_returns_mock_response() -> None:
     graph = build_chat_agent(llm=None)
     result = await graph.ainvoke(
         {
-            "messages": [{"role": "user", "content": "hello"}],
+            "messages": [HumanMessage(content="hello")],
             "user_id": "test-user",
             "conversation_id": "test-conversation",
             "metadata": {},
         }
     )
-    assert result["messages"][-1]["role"] == "assistant"
-    assert "Mock response" in result["messages"][-1]["content"]
+    assert result["messages"][-1].type == "ai"
+    assert "Mock response" in result["messages"][-1].content
+
+
+@pytest.mark.asyncio
+async def test_graph_returns_llm_response_when_llm_is_available() -> None:
+    graph = build_chat_agent(
+        llm=FakeMessagesListChatModel(
+            responses=[
+                AIMessage(content="现在时间已经获取完成。"),
+            ]
+        )
+    )
+
+    result = await graph.ainvoke(
+        {
+            "messages": [HumanMessage(content="现在几点")],
+            "user_id": "test-user",
+            "conversation_id": "test-conversation",
+            "metadata": {},
+        }
+    )
+
+    assert isinstance(result, dict)
+    assert result["messages"][-1].type == "ai"
+    assert result["messages"][-1].content == "现在时间已经获取完成。"
 
 
 @pytest.mark.asyncio

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from langchain_core.messages import AIMessage
 
 from app.graph.code_agent.state import CodeAgentState
 from app.observability.decorators import observe_node
@@ -25,7 +25,6 @@ def create_finalizer_node():
 
     @observe_node("code_agent.finalizer")
     async def finalizer_node(state: CodeAgentState) -> CodeAgentState:
-        messages = list(state.get("messages", []))
         plan = list(state.get("plan", []))
         context_summary = state.get("context_summary") or "未提供上下文。"
         code_draft = state.get("code_draft") or "暂无代码建议。"
@@ -43,18 +42,16 @@ def create_finalizer_node():
                 _build_sections("测试建议", test_suggestions),
             ]
         )
-        messages.append(
-            {
-                "role": "assistant",
-                "content": final_answer,
-                "metadata": {
-                    "task_type": task_type,
-                    "changed_files": changed_files,
-                },
-            }
-        )
         return {
-            "messages": messages,
+            "messages": [
+                AIMessage(
+                    content=final_answer,
+                    additional_kwargs={
+                        "task_type": task_type,
+                        "changed_files": changed_files,
+                    },
+                )
+            ],
             "final_answer": final_answer,
         }
 

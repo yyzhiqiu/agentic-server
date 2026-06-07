@@ -24,6 +24,10 @@ function getStatusTone(status: string) {
     return "bg-amber-100 text-amber-800";
   }
 
+  if (status === "cancelled") {
+    return "bg-slate-300 text-slate-800";
+  }
+
   if (status === "failed") {
     return "bg-red-100 text-red-800";
   }
@@ -176,7 +180,7 @@ export function AgentRunsPage() {
 
               {run.interruptionReason ? (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                  中断原因: {run.interruptionReason}
+                  控制原因: {run.interruptionReason}
                 </div>
               ) : null}
 

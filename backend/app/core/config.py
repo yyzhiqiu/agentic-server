@@ -28,6 +28,9 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/agent_platform"
     DATABASE_ECHO: bool = False
+    AGENT_CHECKPOINT_ENABLED: bool = True
+    AGENT_CHECKPOINT_URL: str | None = None
+    AGENT_CHECKPOINT_CONNECT_TIMEOUT_SECONDS: int = 3
 
     REDIS_ENABLED: bool = False
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -77,6 +80,16 @@ class Settings(BaseSettings):
             raise ValueError("setting value must not be empty")
         return normalized
 
+    @field_validator("AGENT_CHECKPOINT_URL", "LLM_BASE_URL", mode="before")
+    @classmethod
+    def normalize_optional_strings(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        return str(value)
+
     @field_validator("OBJECT_STORAGE_BACKEND")
     @classmethod
     def normalize_object_storage_backend(cls, value: str) -> str:
@@ -86,6 +99,13 @@ class Settings(BaseSettings):
         if normalized == "local":
             return normalized
         raise ValueError("OBJECT_STORAGE_BACKEND must be one of: local, disabled")
+
+    @field_validator("AGENT_CHECKPOINT_CONNECT_TIMEOUT_SECONDS")
+    @classmethod
+    def validate_checkpoint_timeout(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("AGENT_CHECKPOINT_CONNECT_TIMEOUT_SECONDS must be greater than 0")
+        return value
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

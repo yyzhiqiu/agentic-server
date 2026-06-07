@@ -139,6 +139,51 @@ class InMemoryAgentRunService:
         )
         return status
 
+    async def cancel(
+        self,
+        run_id: str,
+        reason: str | None,
+        user_id: str,
+        *,
+        agent_id: str | None = None,
+    ) -> AgentStatus:
+        status = AgentStatus(
+            status="cancelled",
+            run_id=run_id,
+            agent_id=agent_id or self.items.get(run_id, AgentStatus()).agent_id,
+            metadata={"reason": reason} if reason is not None else {},
+        )
+        self.items[run_id] = status
+        existing = self.details.get(
+            run_id,
+            AgentRunDetail(
+                id=run_id,
+                conversation_id=None,
+                agent_id=status.agent_id,
+                status="cancelled",
+                started_at=None,
+                updated_at=None,
+                finished_at=None,
+                duration_ms=None,
+                trace_id=None,
+                error_message=None,
+                error_code=None,
+                interruption_reason=None,
+                input={},
+                output={},
+                metadata={},
+            ),
+        )
+        self.details[run_id] = existing.model_copy(
+            update={
+                "status": "cancelled",
+                "agent_id": status.agent_id,
+                "metadata": {"reason": reason} if reason is not None else {},
+                "interruption_reason": reason,
+            }
+        )
+        return status
+
 
 @pytest.fixture
 def agent_run_service(client) -> Generator[InMemoryAgentRunService, None, None]:
@@ -269,3 +314,20 @@ def test_agent_interrupt_endpoint(client, agent_run_service: InMemoryAgentRunSer
     detail_response = client.get("/v1/agent/runs/run-1")
     assert detail_response.status_code == 200
     assert detail_response.json()["data"]["interruption_reason"] == "manual review"
+
+
+def test_agent_cancel_endpoint(client, agent_run_service: InMemoryAgentRunService) -> None:
+    response = client.post(
+        "/v1/agent/cancel",
+        json={"run_id": "run-2", "agent_id": "chat_agent", "reason": "user stop"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["data"]["status"] == "cancelled"
+    assert payload["data"]["agent_id"] == "chat_agent"
+    assert payload["data"]["metadata"]["reason"] == "user stop"
+
+    detail_response = client.get("/v1/agent/runs/run-2")
+    assert detail_response.status_code == 200
+    assert detail_response.json()["data"]["interruption_reason"] == "user stop"

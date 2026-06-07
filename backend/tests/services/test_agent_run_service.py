@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -12,6 +13,7 @@ from app.audit.service import AuditService
 from app.common.exceptions import AppException
 from app.schemas.tool_call import ToolCallRead
 from app.services.agent_run_service import AgentRunService
+from app.services.agent_runtime_registry import AgentRuntimeRegistry
 
 
 class _FakeSession:
@@ -20,6 +22,9 @@ class _FakeSession:
         yield self
 
     async def flush(self) -> None:
+        return None
+
+    def expire_all(self) -> None:
         return None
 
 
@@ -116,14 +121,47 @@ class _FakeAuditWriter:
         self.events.append(event)
 
 
+def _build_agent_registry() -> dict[str, Any]:
+    return {
+        "chat_agent": SimpleNamespace(
+            graph=object(),
+            metadata=SimpleNamespace(agent_id="chat_agent"),
+        ),
+        "code_agent": SimpleNamespace(
+            graph=object(),
+            metadata=SimpleNamespace(agent_id="code_agent"),
+        ),
+    }
+
+
 @pytest.mark.asyncio
-async def test_agent_run_service_creates_and_reads_run_status() -> None:
+async def test_agent_run_service_resumes_existing_interrupted_run(monkeypatch) -> None:
+    repository = _FakeAgentRunRepository()
+    repository.items["run-1"] = _FakeAgentRun(
+        id="run-1",
+        agent_id="code_agent",
+        user_id="user-1",
+        status="interrupted",
+        input={"messages": [{"role": "user", "content": "hello"}]},
+        output={},
+        metadata_={"trace_id": "trace-1", "reason": "manual review"},
+    )
     audit_writer = _FakeAuditWriter()
+    runtime_registry = AgentRuntimeRegistry()
     service = AgentRunService(
         session=_FakeSession(),  # type: ignore[arg-type]
-        agent_run_repository=_FakeAgentRunRepository(),  # type: ignore[arg-type]
+        agent_run_repository=repository,  # type: ignore[arg-type]
+        agent_registry=_build_agent_registry(),  # type: ignore[arg-type]
+        runtime_registry=runtime_registry,
         audit_service=AuditService(writer=audit_writer),
     )
+
+    scheduled: dict[str, str] = {}
+
+    async def _fake_schedule(*, run_id: str, user_id: str, agent_id: str) -> None:
+        scheduled.update({"run_id": run_id, "user_id": user_id, "agent_id": agent_id})
+
+    monkeypatch.setattr(service, "_schedule_resume", _fake_schedule)
 
     created = await service.resume(
         "run-1",
@@ -131,37 +169,46 @@ async def test_agent_run_service_creates_and_reads_run_status() -> None:
         "user-1",
         agent_id="code_agent",
     )
+
     assert created.status == "running"
     assert created.run_id == "run-1"
     assert created.agent_id == "code_agent"
-    assert created.metadata == {"approved": True}
-    assert len(audit_writer.events) == 1
-    assert audit_writer.events[0].action == AuditAction.AGENT_RESUME
-    assert audit_writer.events[0].result == AuditResult.SUCCESS
-    assert audit_writer.events[0].actor_id == "user-1"
-    assert audit_writer.events[0].resource_type == "agent_run"
-    assert audit_writer.events[0].resource_id == "run-1"
-    assert audit_writer.events[0].metadata == {
-        "status": "running",
-        "input": {"approved": True},
+    assert repository.items["run-1"].status == "running"
+    assert repository.items["run-1"].metadata_["resume_payload"] == {"approved": True}
+    assert "reason" not in repository.items["run-1"].metadata_
+    assert scheduled == {
+        "run_id": "run-1",
+        "user_id": "user-1",
+        "agent_id": "code_agent",
     }
-
-    fetched = await service.status("run-1", "user-1")
-    assert fetched.status == "running"
-    assert fetched.run_id == "run-1"
-    assert fetched.agent_id == "code_agent"
+    assert audit_writer.events[-1].action == AuditAction.AGENT_RESUME
+    assert audit_writer.events[-1].result == AuditResult.SUCCESS
+    assert audit_writer.events[-1].metadata == {
+        "status": "running",
+        "resume_payload": {"approved": True},
+    }
 
 
 @pytest.mark.asyncio
-async def test_agent_run_service_interrupts_existing_run() -> None:
+async def test_agent_run_service_interrupts_existing_run_without_active_task() -> None:
+    repository = _FakeAgentRunRepository()
+    repository.items["run-1"] = _FakeAgentRun(
+        id="run-1",
+        agent_id="chat_agent",
+        user_id="user-1",
+        status="running",
+        input={"trace_id": "trace-1"},
+        output={},
+        metadata_={"trace_id": "trace-1"},
+    )
     audit_writer = _FakeAuditWriter()
     service = AgentRunService(
         session=_FakeSession(),  # type: ignore[arg-type]
-        agent_run_repository=_FakeAgentRunRepository(),  # type: ignore[arg-type]
+        agent_run_repository=repository,  # type: ignore[arg-type]
+        runtime_registry=AgentRuntimeRegistry(),
         audit_service=AuditService(writer=audit_writer),
     )
 
-    await service.resume("run-1", {"approved": True}, "user-1", agent_id="chat_agent")
     interrupted = await service.interrupt(
         "run-1",
         "manual review",
@@ -171,18 +218,53 @@ async def test_agent_run_service_interrupts_existing_run() -> None:
 
     assert interrupted.status == "interrupted"
     assert interrupted.agent_id == "chat_agent"
-    assert interrupted.metadata == {"reason": "manual review"}
-
-    detail = await service.get("run-1", "user-1")
-    assert detail.interruption_reason == "manual review"
-    assert detail.error_message is None
-    assert detail.error_code is None
+    assert interrupted.metadata["reason"] == "manual review"
+    assert repository.items["run-1"].metadata_["resume_available"] is True
     assert audit_writer.events[-1].action == AuditAction.AGENT_INTERRUPT
     assert audit_writer.events[-1].result == AuditResult.SUCCESS
-    assert audit_writer.events[-1].resource_id == "run-1"
     assert audit_writer.events[-1].metadata == {
         "status": "interrupted",
         "reason": "manual review",
+    }
+
+
+@pytest.mark.asyncio
+async def test_agent_run_service_cancels_existing_run_without_active_task() -> None:
+    repository = _FakeAgentRunRepository()
+    repository.items["run-1"] = _FakeAgentRun(
+        id="run-1",
+        agent_id="chat_agent",
+        user_id="user-1",
+        status="running",
+        input={"trace_id": "trace-1"},
+        output={},
+        metadata_={"trace_id": "trace-1"},
+    )
+    audit_writer = _FakeAuditWriter()
+    service = AgentRunService(
+        session=_FakeSession(),  # type: ignore[arg-type]
+        agent_run_repository=repository,  # type: ignore[arg-type]
+        runtime_registry=AgentRuntimeRegistry(),
+        audit_service=AuditService(writer=audit_writer),
+    )
+
+    cancelled = await service.cancel(
+        "run-1",
+        "user stopped it",
+        "user-1",
+        agent_id="chat_agent",
+    )
+
+    assert cancelled.status == "cancelled"
+    assert cancelled.agent_id == "chat_agent"
+    assert cancelled.metadata["reason"] == "user stopped it"
+    assert repository.items["run-1"].output["status"] == "cancelled"
+    assert repository.items["run-1"].output["reason"] == "user stopped it"
+    assert audit_writer.events[-1].action == AuditAction.AGENT_CANCEL
+    assert audit_writer.events[-1].result == AuditResult.SUCCESS
+    assert audit_writer.events[-1].metadata == {
+        "status": "cancelled",
+        "reason": "user stopped it",
     }
 
 
@@ -200,25 +282,43 @@ async def test_agent_run_service_returns_idle_for_unknown_run() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_run_service_lists_and_reads_user_runs() -> None:
+    repository = _FakeAgentRunRepository()
+    repository.items["run-1"] = _FakeAgentRun(
+        id="run-1",
+        agent_id="chat_agent",
+        user_id="user-1",
+        status="interrupted",
+        input={"trace_id": "trace-1"},
+        output={},
+        metadata_={"trace_id": "trace-1", "reason": "manual review"},
+        created_at=datetime(2026, 6, 7, 10, 0, 0, tzinfo=timezone.utc),
+    )
+    repository.items["run-2"] = _FakeAgentRun(
+        id="run-2",
+        agent_id="code_agent",
+        user_id="user-1",
+        status="cancelled",
+        input={"trace_id": "trace-2"},
+        output={"status": "cancelled"},
+        metadata_={"trace_id": "trace-2", "reason": "user stop"},
+        created_at=datetime(2026, 6, 7, 10, 0, 1, tzinfo=timezone.utc),
+    )
     service = AgentRunService(
         session=_FakeSession(),  # type: ignore[arg-type]
-        agent_run_repository=_FakeAgentRunRepository(),  # type: ignore[arg-type]
+        agent_run_repository=repository,  # type: ignore[arg-type]
     )
-
-    await service.resume("run-1", {"trace_id": "trace-1"}, "user-1", agent_id="chat_agent")
-    await service.resume("run-2", {"trace_id": "trace-2"}, "user-1", agent_id="code_agent")
 
     listed = await service.list("user-1")
     assert listed.total == 2
     assert listed.items[0].id == "run-2"
     assert listed.items[0].agent_id == "code_agent"
-    assert listed.items[0].trace_id == "trace-2"
+    assert listed.items[0].interruption_reason == "user stop"
 
     detail = await service.get("run-1", "user-1")
     assert detail.id == "run-1"
     assert detail.agent_id == "chat_agent"
     assert detail.input == {"trace_id": "trace-1"}
-    assert detail.metadata == {"trace_id": "trace-1"}
+    assert detail.metadata == {"trace_id": "trace-1", "reason": "manual review"}
 
 
 @pytest.mark.asyncio
@@ -301,10 +401,10 @@ async def test_agent_run_service_filters_runs_by_status_and_conversation() -> No
         agent_id="code_agent",
         user_id="user-1",
         conversation_id="conversation-2",
-        status="failed",
+        status="cancelled",
         input={},
-        output={"error": "boom", "code": "S00001"},
-        metadata_={},
+        output={"status": "cancelled"},
+        metadata_={"reason": "user stop"},
         created_at=datetime(2026, 6, 7, 10, 0, 1, tzinfo=timezone.utc),
     )
     repository.items["run-3"] = _FakeAgentRun(
@@ -325,12 +425,12 @@ async def test_agent_run_service_filters_runs_by_status_and_conversation() -> No
 
     filtered = await service.list(
         "user-1",
-        status="failed",
-        conversation_id="conversation-1",
+        status="cancelled",
+        conversation_id="conversation-2",
     )
 
     assert filtered.total == 1
-    assert [item.id for item in filtered.items] == ["run-3"]
+    assert [item.id for item in filtered.items] == ["run-2"]
     assert filtered.items[0].agent_id == "code_agent"
 
 

@@ -4,29 +4,21 @@ from __future__ import annotations
 
 from typing import Any
 
+from langchain_core.messages import HumanMessage, SystemMessage
+
 from app.graph.code_agent.prompts import CODE_AGENT_SYSTEM_PROMPT
 from app.graph.code_agent.state import CodeAgentState
+from app.graph.shared.messages import read_message_content, read_message_role
 from app.observability.decorators import observe_node
 
 
-def _last_user_content(messages: list[dict[str, Any]]) -> str:
+def _last_user_content(messages: list[Any]) -> str:
     """提取最近一条用户消息内容。"""
 
     for message in reversed(messages):
-        if message.get("role") == "user":
-            return str(message.get("content", ""))
+        if read_message_role(message) == "user":
+            return read_message_content(message)
     return ""
-
-
-def _normalize_llm_content(response: Any) -> str:
-    """把不同 LLM 响应结构规整为纯文本。"""
-
-    content = getattr(response, "content", response)
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return "\n".join(str(item) for item in content)
-    return str(content)
 
 
 async def _call_llm(
@@ -37,8 +29,6 @@ async def _call_llm(
     context_summary: str,
 ) -> str:
     """调用 LLM 生成代码建议草稿。"""
-
-    from langchain_core.messages import HumanMessage, SystemMessage
 
     response = await llm.ainvoke(
         [
@@ -54,7 +44,7 @@ async def _call_llm(
             ),
         ]
     )
-    return _normalize_llm_content(response)
+    return read_message_content(response)
 
 
 def create_coder_node(llm: Any | None = None):

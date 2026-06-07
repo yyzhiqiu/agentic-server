@@ -183,10 +183,11 @@ agentic-server/
 │   │   │   ├── state.py                           # 默认 AgentState 兼容入口；内部转发到 chat_agent.state
 │   │   │   ├── builder.py                         # 默认 Graph 构建兼容入口；内部转发到 chat_agent.builder
 │   │   │   ├── routing.py                         # 默认路由兼容入口；内部转发到 chat_agent.routing
-│   │   │   ├── checkpoint.py                      # Graph 检查点工厂；统一管理持久化检查点扩展点
+│   │   │   ├── checkpoint.py                      # Graph 检查点工厂；支持 PostgreSQL 持久化 checkpoint 与内存降级
 │   │   │   ├── store.py                           # Graph 共享存储工厂；当前提供最小内存存储
-│   │   │   ├── shared/                            # 多 Agent 共享状态、工具与提示词片段
+│   │   │   ├── shared/                            # 多 Agent 共享状态、消息适配、工具与提示词片段
 │   │   │   │   ├── state.py                       # BaseAgentState；所有 Agent 的基础状态定义
+│   │   │   │   ├── messages.py                    # ChatMessage 与 LangChain 消息对象的双向转换
 │   │   │   │   ├── tools/                         # 多 Agent 共享工具；search、file、calculator、database
 │   │   │   │   └── prompts/                       # 多 Agent 共享提示词片段；system、safety、format
 │   │   │   ├── chat_agent/                        # 默认通用聊天 Agent；保持单文件 nodes.py 的轻量结构
@@ -214,11 +215,12 @@ agentic-server/
 │   │   │
 │   │   ├── services/                              # 业务服务层；负责编排业务逻辑、事务边界和跨模块协作
 │   │   │   ├── __init__.py                        # 标记 services 为 Python 包
-│   │   │   ├── graph_runner.py                    # Graph 执行服务；封装 graph.invoke、graph.ainvoke、graph.astream_events
-│   │   │   ├── chat_service.py                    # 聊天服务；协调会话、消息、Graph 执行、审计记录
+│   │   │   ├── graph_runner.py                    # Graph 执行服务；封装 invoke/stream，并以会话级 thread 驱动 checkpoint
+│   │   │   ├── chat_service.py                    # 聊天服务；协调会话级 checkpoint、消息持久化、审计记录与恢复编排
 │   │   │   ├── conversation_service.py            # 会话服务；创建、查询、删除、归档会话
 │   │   │   ├── message_service.py                 # 消息服务；消息写入、历史消息查询、消息状态维护
-│   │   │   ├── agent_run_service.py               # Agent 运行服务；创建运行记录、更新状态、关联 trace
+│   │   │   ├── agent_run_service.py               # Agent 运行服务；运行记录查询，以及 interrupt/resume/cancel 控制
+│   │   │   ├── agent_runtime_registry.py          # 运行时注册表；跟踪活跃任务并协调中断、恢复与取消
 │   │   │   ├── tool_call_service.py               # 工具调用服务；记录工具调用输入输出、错误和耗时
 │   │   │   ├── file_service.py                    # 文件服务；处理上传、校验、状态更新、文档解析触发
 │   │   │   └── user_service.py                    # 用户服务；用户信息、API Key、权限相关逻辑
@@ -463,6 +465,7 @@ agentic-server/
 - Agent Run：列表、详情、状态、中断、恢复
 - 智能体归属字段：`conversations.agent_id` 与 `agent_runs.agent_id` 已作为正式字段持久化，`metadata.agent_id` 仅保留兼容兜底
 - 基础持久化链路：conversation、message、agent run、tool call、audit log
+- 标准 checkpoint 多轮记忆：默认以会话级 `conversation_id` 作为 LangGraph `thread_id`，普通对话只发送本轮增量消息
 - 最小文档索引链路：文本类文件上传后可登记并索引到 `documents`
 
 前端：

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -15,7 +17,9 @@ from app.db.models.agent_run import AgentRun
 from app.db.models.conversation import Conversation
 from app.db.models.message import Message
 from app.db.models.user import User
+from app.graph.shared.messages import message_like_to_chat_message
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse, ChatStreamEvent
+from app.services.agent_runtime_registry import AgentRuntimeRegistry, RuntimeControlRequest
 from app.services.chat_service import ChatService
 from app.services.tool_call_service import ToolCallService
 from app.services.user_service import UserService
@@ -37,21 +41,64 @@ class _FakeGraphRunner:
         self.error = error
         self.stream_error = stream_error
         self.tool_calls = tool_calls or []
-        self.requests: list[tuple[ChatRequest, str | None]] = []
+        self.requests: list[tuple[ChatRequest, str | None, str | None, bool]] = []
+        self.thread_messages: dict[str, list[ChatMessage]] = {}
 
-    async def run_chat(self, request: ChatRequest, *, user_id: str | None = None) -> ChatResponse:
-        self.requests.append((request, user_id))
+    async def get_state(self, thread_id: str):
+        messages = self.thread_messages.get(thread_id)
+        if messages is None:
+            return None
+        return SimpleNamespace(values={"messages": list(messages)})
+
+    async def update_state(
+        self,
+        thread_id: str,
+        values: dict[str, Any],
+        *,
+        as_node: str | None = None,
+    ) -> dict[str, Any]:
+        _ = as_node
+        raw_messages = values.get("messages", [])
+        normalized = [
+            converted
+            for item in raw_messages
+            if (converted := message_like_to_chat_message(item)) is not None
+        ]
+        self.thread_messages[thread_id] = normalized
+        return {"configurable": {"thread_id": thread_id}}
+
+    @staticmethod
+    def _response_content(request: ChatRequest) -> str:
+        latest = request.messages[-1]
+        return f"Mock response: {latest.content}"
+
+    async def run_chat(
+        self,
+        request: ChatRequest,
+        *,
+        user_id: str | None = None,
+        thread_id: str | None = None,
+        resume: bool = False,
+    ) -> ChatResponse:
+        self.requests.append((request, user_id, thread_id, resume))
         if self.error is not None:
             raise self.error
 
+        resolved_thread_id = thread_id or request.conversation_id or "default-thread"
+        history = list(self.thread_messages.get(resolved_thread_id, []))
+        if not resume:
+            history.extend(request.messages)
+
         assistant = ChatMessage(
             role="assistant",
-            content=f"Mock response: {request.messages[-1].content}",
+            content=self._response_content(request),
         )
+        history.append(assistant)
+        self.thread_messages[resolved_thread_id] = history
         return ChatResponse(
             conversation_id=request.conversation_id,
             message=assistant,
-            messages=[*request.messages, assistant],
+            messages=history,
             metadata={"model": "mock"},
             tool_calls=self.tool_calls,
         )
@@ -61,20 +108,29 @@ class _FakeGraphRunner:
         request: ChatRequest,
         *,
         user_id: str | None = None,
+        thread_id: str | None = None,
+        resume: bool = False,
     ):
-        self.requests.append((request, user_id))
+        self.requests.append((request, user_id, thread_id, resume))
         if self.stream_error is not None:
             yield "error", self.stream_error
             return
 
+        resolved_thread_id = thread_id or request.conversation_id or "default-thread"
+        history = list(self.thread_messages.get(resolved_thread_id, []))
+        if not resume:
+            history.extend(request.messages)
+
         assistant = ChatMessage(
             role="assistant",
-            content=f"Mock response: {request.messages[-1].content}",
+            content=self._response_content(request),
         )
+        history.append(assistant)
+        self.thread_messages[resolved_thread_id] = history
         response = ChatResponse(
             conversation_id=request.conversation_id,
             message=assistant,
-            messages=[*request.messages, assistant],
+            messages=history,
             metadata={"model": "mock"},
             tool_calls=self.tool_calls,
         )
@@ -156,6 +212,30 @@ class _FakeAgentRunRepository:
         self.items[agent_run.id] = agent_run
         return agent_run
 
+    async def get_by_id_for_user(self, run_id: str, user_id: str) -> AgentRun | None:
+        item = self.items.get(run_id)
+        if item is None or item.user_id != user_id:
+            return None
+        return item
+
+    async def get_latest_by_conversation_for_user(
+        self,
+        conversation_id: str,
+        user_id: str,
+    ) -> AgentRun | None:
+        candidates = [
+            item
+            for item in self.items.values()
+            if item.conversation_id == conversation_id and item.user_id == user_id
+        ]
+        if not candidates:
+            return None
+        candidates.sort(
+            key=lambda item: item.created_at or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=True,
+        )
+        return candidates[0]
+
 
 class _FakeToolCallRepository:
     def __init__(self) -> None:
@@ -192,6 +272,7 @@ def _build_service(
     tool_call_repository: _FakeToolCallRepository | None = None,
     audit_writer: _FakeAuditWriter | None = None,
     session: _FakeSession | None = None,
+    runtime_registry: AgentRuntimeRegistry | None = None,
 ) -> tuple[
     ChatService,
     _FakeGraphRunner,
@@ -219,6 +300,7 @@ def _build_service(
         message_repository=messages,  # type: ignore[arg-type]
         agent_run_repository=agent_runs,  # type: ignore[arg-type]
         user_service=user_service,
+        runtime_registry=runtime_registry,
         tool_call_service=ToolCallService(  # type: ignore[arg-type]
             tool_call_repository=tool_calls,
         ),
@@ -240,13 +322,17 @@ async def test_chat_service_creates_conversation_and_persists_chat_state() -> No
     assert response.metadata["model"] == "mock"
     assert response.metadata["run_id"] == "run-1"
     assert response.metadata["agent_id"] == "chat_agent"
+    assert response.metadata["thread_id"] == "conversation-1"
     assert conversations.items["conversation-1"].title == "hello world"
     assert conversations.items["conversation-1"].agent_id == "chat_agent"
+    assert conversations.items["conversation-1"].metadata_["thread_id"] == "conversation-1"
     assert [message.role for message in messages.items] == ["user", "assistant"]
     assert agent_runs.items["run-1"].agent_id == "chat_agent"
     assert agent_runs.items["run-1"].status == "completed"
     assert agent_runs.items["run-1"].conversation_id == "conversation-1"
+    assert agent_runs.items["run-1"].metadata_["thread_id"] == "conversation-1"
     assert graph.requests[0][0].conversation_id == "conversation-1"
+    assert graph.requests[0][0].messages == [ChatMessage(role="user", content="hello world")]
     assert users.items["user-1"].name == "tester"
 
 
@@ -254,7 +340,7 @@ async def test_chat_service_creates_conversation_and_persists_chat_state() -> No
 async def test_chat_service_reuses_existing_conversation_without_replaying_history() -> None:
     conversations = _FakeConversationRepository()
     messages = _FakeMessageRepository()
-    service, _, _, persisted_messages, _, _ = _build_service(
+    service, graph, _, persisted_messages, _, _ = _build_service(
         conversation_repository=conversations,
         message_repository=messages,
     )
@@ -294,6 +380,12 @@ async def test_chat_service_reuses_existing_conversation_without_replaying_histo
     )
 
     assert response.conversation_id == "conversation-9"
+    assert response.messages == [
+        ChatMessage(role="user", content="hello", metadata={}),
+        ChatMessage(role="assistant", content="Mock response: hello", metadata={}),
+        ChatMessage(role="user", content="follow up", metadata={}),
+        ChatMessage(role="assistant", content="Mock response: follow up", metadata={}),
+    ]
     assert len(persisted_messages.items) == 4
     assert [message.content for message in persisted_messages.items] == [
         "hello",
@@ -301,6 +393,55 @@ async def test_chat_service_reuses_existing_conversation_without_replaying_histo
         "follow up",
         "Mock response: follow up",
     ]
+    assert graph.requests[0][0].messages == [ChatMessage(role="user", content="follow up")]
+    assert graph.requests[0][2] == "conversation-9"
+
+
+@pytest.mark.asyncio
+async def test_chat_service_existing_conversation_can_continue_with_incremental_message_only() -> None:
+    conversations = _FakeConversationRepository()
+    messages = _FakeMessageRepository()
+    service, graph, _, persisted_messages, _, _ = _build_service(
+        conversation_repository=conversations,
+        message_repository=messages,
+    )
+    user = CurrentUser(id="user-1", name="tester")
+
+    conversation = await conversations.add(
+        Conversation(
+            id="conversation-8",
+            user_id="user-1",
+            agent_id="chat_agent",
+            title="demo",
+            metadata_={},
+        )
+    )
+    await persisted_messages.add(
+        Message(conversation_id=conversation.id, role="user", content="hello", metadata_={})
+    )
+    await persisted_messages.add(
+        Message(
+            conversation_id=conversation.id,
+            role="assistant",
+            content="Mock response: hello",
+            metadata_={},
+        )
+    )
+
+    response = await service.chat(
+        ChatRequest(
+            conversation_id=conversation.id,
+            messages=[ChatMessage(role="user", content="next step")],
+        ),
+        user,
+    )
+
+    assert response.messages[-2:] == [
+        ChatMessage(role="user", content="next step", metadata={}),
+        ChatMessage(role="assistant", content="Mock response: next step", metadata={}),
+    ]
+    assert graph.requests[0][0].messages == [ChatMessage(role="user", content="next step")]
+    assert graph.requests[0][2] == "conversation-8"
 
 
 @pytest.mark.asyncio
@@ -490,3 +631,57 @@ async def test_chat_service_stream_marks_run_failed_when_graph_yields_error() ->
     assert agent_runs.items["run-1"].status == "failed"
     assert agent_runs.items["run-1"].output["error"] == "LLM_API_KEY is not configured"
     assert agent_runs.items["run-1"].output["code"] == "L00001"
+
+
+@pytest.mark.asyncio
+async def test_chat_service_passes_conversation_thread_id_to_graph_runner() -> None:
+    service, graph, _, _, _, _ = _build_service()
+
+    await service.chat(
+        ChatRequest(messages=[ChatMessage(role="user", content="hello")]),
+        CurrentUser(id="user-1", name="tester"),
+    )
+
+    assert graph.requests[0][2] == "conversation-1"
+    assert graph.requests[0][3] is False
+
+
+@pytest.mark.asyncio
+async def test_chat_service_marks_run_cancelled_when_runtime_requests_cancel() -> None:
+    class _CancelledRegistry:
+        async def register(self, run_id: str, task) -> None:
+            return None
+
+        async def unregister(self, run_id: str, task) -> None:
+            return None
+
+        async def get_control_request(self, run_id: str) -> RuntimeControlRequest:
+            return RuntimeControlRequest(action="cancel", reason="user cancelled")
+
+    class _CancellingGraphRunner(_FakeGraphRunner):
+        async def run_chat(
+            self,
+            request: ChatRequest,
+            *,
+            user_id: str | None = None,
+            thread_id: str | None = None,
+            resume: bool = False,
+        ) -> ChatResponse:
+            raise asyncio.CancelledError()
+
+    service, _, _, _, agent_runs, _ = _build_service(
+        graph_runner=_CancellingGraphRunner(),
+        runtime_registry=_CancelledRegistry(),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(AppException) as exc_info:
+        await service.chat(
+            ChatRequest(messages=[ChatMessage(role="user", content="hello")]),
+            CurrentUser(id="user-1", name="tester"),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.message == "Agent 运行已取消"
+    assert agent_runs.items["run-1"].status == "cancelled"
+    assert agent_runs.items["run-1"].metadata_["reason"] == "user cancelled"
+    assert agent_runs.items["run-1"].output["status"] == "cancelled"

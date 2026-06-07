@@ -28,8 +28,8 @@ class AgentListResponse(RootModel[list[AgentMetadataResponse]]):
 class AgentChatRequest(ChatRequest):
     """指定 Agent 的聊天请求。
 
-    在通用聊天结构之外，显式暴露代码类 Agent 常见的上下文字段，
-    避免继续依赖 ``metadata`` 中的隐式约定。
+    在通用聊天结构之外，显式暴露代码类 Agent 常见的上下文字段，避免继续依赖
+    ``metadata`` 中的隐式约定。
     """
 
     repository_context: dict[str, Any] = Field(default_factory=dict)
@@ -44,7 +44,7 @@ class AgentChatResponse(ChatResponse):
 class AgentStatus(BaseModel):
     """单个运行记录使用的轻量控制状态负载。"""
 
-    status: Literal["idle", "running", "interrupted", "completed", "failed"] = "idle"
+    status: Literal["idle", "running", "interrupted", "cancelled", "completed", "failed"] = "idle"
     run_id: str | None = None
     agent_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -56,7 +56,7 @@ class AgentRunListItem(BaseModel):
     id: str
     conversation_id: str | None = None
     agent_id: str | None = None
-    status: Literal["running", "interrupted", "completed", "failed", "created"] = "created"
+    status: Literal["running", "interrupted", "cancelled", "completed", "failed", "created"] = "created"
     started_at: datetime | None = None
     updated_at: datetime | None = None
     finished_at: datetime | None = None
@@ -84,7 +84,7 @@ class AgentRunList(BaseModel):
 
 
 class AgentResumeRequest(BaseModel):
-    """用于将运行记录标记为恢复执行的请求负载。"""
+    """用于恢复已中断运行的请求负载。"""
 
     run_id: str
     agent_id: str | None = None
@@ -93,6 +93,14 @@ class AgentResumeRequest(BaseModel):
 
 class AgentInterruptRequest(BaseModel):
     """用于将运行记录标记为中断的请求负载。"""
+
+    run_id: str
+    agent_id: str | None = None
+    reason: str | None = None
+
+
+class AgentCancelRequest(BaseModel):
+    """用于将运行记录标记为取消的请求负载。"""
 
     run_id: str
     agent_id: str | None = None

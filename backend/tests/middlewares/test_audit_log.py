@@ -12,8 +12,8 @@ def test_audit_log_records_request_context(client, caplog) -> None:
 
     assert response.status_code == 200
     assert any(
-        "method=GET" in message
-        and "path=/health" in message
+        "请求方法=GET" in message
+        and "路径=/health" in message
         and settings.GUEST_USER_ID in message
         for message in caplog.messages
     )

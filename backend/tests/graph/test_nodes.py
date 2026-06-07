@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from langchain_core.messages import HumanMessage
 
 from app.graph.chat_agent.nodes import create_chat_agent_node
 from app.graph.code_agent.nodes import (
@@ -16,12 +17,12 @@ from app.graph.code_agent.nodes import (
 @pytest.mark.asyncio
 async def test_chat_agent_node_returns_mock_message_without_llm() -> None:
     node = create_chat_agent_node(None)
-    state = {"messages": [{"role": "user", "content": "hello"}], "metadata": {}}
+    state = {"messages": [HumanMessage(content="hello")], "metadata": {}}
 
     result = await node(state)
 
-    assert result["messages"][-1]["role"] == "assistant"
-    assert "chat_agent" in result["messages"][-1]["content"]
+    assert result["messages"][-1].type == "ai"
+    assert "chat_agent" in result["messages"][-1].content
 
 
 @pytest.mark.asyncio
@@ -34,7 +35,7 @@ async def test_code_agent_nodes_can_build_final_mock_response() -> None:
     finalizer = create_finalizer_node()
 
     state = {
-        "messages": [{"role": "user", "content": "review this function"}],
+        "messages": [HumanMessage(content="review this function")],
         "metadata": {"agent_id": "code_agent"},
         "task_type": "code_review",
         "repository_context": {"entrypoint": "backend/app/main.py"},
@@ -48,6 +49,6 @@ async def test_code_agent_nodes_can_build_final_mock_response() -> None:
     state = {**state, **(await test_planner(state))}
     result = await finalizer(state)
 
-    assert result["messages"][-1]["role"] == "assistant"
-    assert "code_agent" in result["messages"][-1]["content"]
-    assert "测试建议" in result["messages"][-1]["content"]
+    assert result["messages"][-1].type == "ai"
+    assert "code_agent" in result["messages"][-1].content
+    assert "测试建议" in result["messages"][-1].content

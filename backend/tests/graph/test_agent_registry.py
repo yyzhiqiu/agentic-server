@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from langchain_core.messages import HumanMessage
 
 from app.graph.default import DEFAULT_AGENT_ID
 from app.graph.registry import build_agent_registry
@@ -25,17 +26,16 @@ async def test_agent_registry_graphs_can_return_mock_messages() -> None:
 
     chat_result = await registry["chat_agent"].graph.ainvoke(
         {
-            "messages": [{"role": "user", "content": "hello"}],
+            "messages": [HumanMessage(content="hello")],
             "metadata": {},
         }
     )
     code_result = await registry["code_agent"].graph.ainvoke(
         {
-            "messages": [{"role": "user", "content": "review this function"}],
+            "messages": [HumanMessage(content="review this function")],
             "metadata": {"task_type": "code_review"},
         }
     )
 
-    assert "chat_agent" in chat_result["messages"][-1]["content"]
-    assert "code_agent" in code_result["messages"][-1]["content"]
-
+    assert "chat_agent" in chat_result["messages"][-1].content
+    assert "code_agent" in code_result["messages"][-1].content

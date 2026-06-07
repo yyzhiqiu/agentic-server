@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends
 from app.api.dependencies import get_agent_run_service, get_current_user
 from app.common.responses import success_response
 from app.core.security import CurrentUser
-from app.schemas.agent import AgentInterruptRequest, AgentResumeRequest
+from app.schemas.agent import AgentCancelRequest, AgentInterruptRequest, AgentResumeRequest
 from app.services.agent_run_service import AgentRunService
 
 router = APIRouter(prefix="/agent", tags=["agent"])
@@ -23,7 +23,7 @@ router = APIRouter(prefix="/agent", tags=["agent"])
 async def list_agent_runs(
     limit: int = 20,
     offset: int = 0,
-    status: Literal["running", "interrupted", "completed", "failed", "created"] | None = None,
+    status: Literal["running", "interrupted", "cancelled", "completed", "failed", "created"] | None = None,
     conversation_id: str | None = None,
     service: AgentRunService = Depends(get_agent_run_service),
     user: CurrentUser = Depends(get_current_user),
@@ -90,6 +90,23 @@ async def interrupt_agent(
     """将当前用户的 Agent 运行记录标记为已中断。"""
 
     data = await service.interrupt(
+        payload.run_id,
+        payload.reason,
+        user.id,
+        agent_id=payload.agent_id,
+    )
+    return success_response(data.model_dump())
+
+
+@router.post("/cancel")
+async def cancel_agent(
+    payload: AgentCancelRequest,
+    service: AgentRunService = Depends(get_agent_run_service),
+    user: CurrentUser = Depends(get_current_user),
+) -> dict:
+    """将当前用户的 Agent 运行记录标记为已取消。"""
+
+    data = await service.cancel(
         payload.run_id,
         payload.reason,
         user.id,

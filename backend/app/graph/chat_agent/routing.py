@@ -10,9 +10,8 @@ from app.graph.chat_agent.state import ChatAgentState
 def should_continue(state: ChatAgentState) -> Literal["end"]:
     """返回通用聊天 Agent 的下一跳。
 
-    Returns:
-        "end": 当前脚手架仅包含单个聊天节点，本轮图执行直接结束。
+    当前版本暂不启用工具调用循环，因此模型节点执行后直接结束。
     """
 
+    _ = state
     return "end"
-

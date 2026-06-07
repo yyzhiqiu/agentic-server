@@ -8,9 +8,8 @@ from app.graph.shared.state import BaseAgentState
 
 
 class CodeAgentState(BaseAgentState, total=False):
-    """代码助手 Agent 在单次图执行中的共享状态。"""
+    """描述代码助手在单次图执行中的共享状态字段。"""
 
-    messages: list[dict[str, Any]]
     repository_context: dict[str, Any]
     changed_files: list[str]
     task_type: str | None

@@ -1,10 +1,17 @@
+import { useState } from "react";
 import { useParams } from "react-router-dom";
 
-import { useAgentRunDetail } from "@/features/agent-runs/hooks";
+import {
+  useAgentRunDetail,
+  useCancelAgentRun,
+  useInterruptAgentRun,
+  useResumeAgentRun,
+} from "@/features/agent-runs/hooks";
 import { EmptyState } from "@/shared/components/feedback/EmptyState";
 import { ErrorState } from "@/shared/components/feedback/ErrorState";
 import { LoadingState } from "@/shared/components/feedback/LoadingState";
 import { Badge } from "@/shared/components/ui/badge";
+import { Button } from "@/shared/components/ui/button";
 import { Card } from "@/shared/components/ui/card";
 import { ScrollArea } from "@/shared/components/ui/scroll-area";
 import { Separator } from "@/shared/components/ui/separator";
@@ -23,6 +30,10 @@ function getStatusTone(status: string) {
     return "bg-amber-100 text-amber-800";
   }
 
+  if (status === "cancelled") {
+    return "bg-slate-300 text-slate-800";
+  }
+
   if (status === "failed") {
     return "bg-red-100 text-red-800";
   }
@@ -39,9 +50,112 @@ function renderJson(value: Record<string, unknown>) {
   return JSON.stringify(value, null, 2);
 }
 
+function getControlErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  return "操作失败，请稍后重试。";
+}
+
 export function AgentRunDetailPage() {
   const { runId } = useParams();
   const runQuery = useAgentRunDetail(runId ?? "");
+  const resumeMutation = useResumeAgentRun();
+  const interruptMutation = useInterruptAgentRun();
+  const cancelMutation = useCancelAgentRun();
+  const [actionFeedback, setActionFeedback] = useState<{
+    tone: "success" | "error";
+    message: string;
+  } | null>(null);
+
+  const run = runQuery.data;
+  const isActionPending =
+    resumeMutation.isPending ||
+    interruptMutation.isPending ||
+    cancelMutation.isPending;
+  const canResume =
+    run?.status === "interrupted" &&
+    run.metadata.resume_available !== false;
+  const canInterrupt = run?.status === "running";
+  const canCancel =
+    run?.status === "running" ||
+    run?.status === "interrupted" ||
+    run?.status === "created";
+
+  async function handleResume() {
+    if (!runId || !run) {
+      return;
+    }
+
+    setActionFeedback(null);
+    try {
+      await resumeMutation.mutateAsync({
+        runId,
+        agentId: run.agentId,
+      });
+      setActionFeedback({
+        tone: "success",
+        message: "已提交恢复请求，运行会从最近一次 checkpoint 继续执行。",
+      });
+    } catch (error) {
+      setActionFeedback({
+        tone: "error",
+        message: getControlErrorMessage(error),
+      });
+    }
+  }
+
+  async function handleInterrupt() {
+    if (!runId || !run) {
+      return;
+    }
+
+    setActionFeedback(null);
+    try {
+      await interruptMutation.mutateAsync({
+        runId,
+        agentId: run.agentId,
+      });
+      setActionFeedback({
+        tone: "success",
+        message: "已提交中断请求，当前运行会尽量停止并保留恢复点。",
+      });
+    } catch (error) {
+      setActionFeedback({
+        tone: "error",
+        message: getControlErrorMessage(error),
+      });
+    }
+  }
+
+  async function handleCancel() {
+    if (!runId || !run) {
+      return;
+    }
+
+    const confirmed = window.confirm("取消后该运行将不可恢复，确认继续吗？");
+    if (!confirmed) {
+      return;
+    }
+
+    setActionFeedback(null);
+    try {
+      await cancelMutation.mutateAsync({
+        runId,
+        agentId: run.agentId,
+      });
+      setActionFeedback({
+        tone: "success",
+        message: "已提交取消请求，当前运行会停止且不再允许恢复。",
+      });
+    } catch (error) {
+      setActionFeedback({
+        tone: "error",
+        message: getControlErrorMessage(error),
+      });
+    }
+  }
 
   return (
     <section className="space-y-6">
@@ -77,12 +191,52 @@ export function AgentRunDetailPage() {
                   会话 ID: {runQuery.data.conversationId ?? "未关联"}
                 </p>
               </div>
-              <Badge className={getStatusTone(runQuery.data.status)}>
-                状态: {runQuery.data.status}
-              </Badge>
+              <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+                <Badge className={getStatusTone(runQuery.data.status)}>
+                  状态: {runQuery.data.status}
+                </Badge>
+                {canResume ? (
+                  <Button size="sm" onClick={() => void handleResume()} disabled={isActionPending}>
+                    恢复运行
+                  </Button>
+                ) : null}
+                {canInterrupt ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => void handleInterrupt()}
+                    disabled={isActionPending}
+                  >
+                    中断运行
+                  </Button>
+                ) : null}
+                {canCancel ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => void handleCancel()}
+                    disabled={isActionPending}
+                    className="border-red-200 text-red-700 hover:bg-red-50"
+                  >
+                    取消运行
+                  </Button>
+                ) : null}
+              </div>
             </div>
 
             <Separator />
+
+            {actionFeedback ? (
+              <div
+                className={
+                  actionFeedback.tone === "success"
+                    ? "rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800"
+                    : "rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+                }
+              >
+                {actionFeedback.message}
+              </div>
+            ) : null}
 
             <div className="grid gap-3 text-sm text-slate-600 md:grid-cols-2 lg:grid-cols-5">
               <div>
@@ -153,7 +307,7 @@ export function AgentRunDetailPage() {
 
             {runQuery.data.interruptionReason ? (
               <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                中断原因: {runQuery.data.interruptionReason}
+                控制原因: {runQuery.data.interruptionReason}
               </div>
             ) : null}
           </Card>

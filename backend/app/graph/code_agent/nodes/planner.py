@@ -5,15 +5,16 @@ from __future__ import annotations
 from typing import Any
 
 from app.graph.code_agent.state import CodeAgentState
+from app.graph.shared.messages import read_message_content, read_message_role
 from app.observability.decorators import observe_node
 
 
-def _last_user_content(messages: list[dict[str, Any]]) -> str:
+def _last_user_content(messages: list[Any]) -> str:
     """提取最近一条用户消息内容。"""
 
     for message in reversed(messages):
-        if message.get("role") == "user":
-            return str(message.get("content", ""))
+        if read_message_role(message) == "user":
+            return read_message_content(message)
     return ""
 
 

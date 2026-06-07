@@ -18,13 +18,9 @@ def build_chat_agent(
 ):
     """构建默认通用聊天 Agent 的独立 graph。
 
-    Args:
-        llm: 启动阶段注入的 LLM 实例；为空时节点会自动降级到 mock 回复。
-        checkpointer: 预留的 LangGraph 检查点对象。
-        store: 预留的共享存储对象；当前骨架阶段仅保留参数，不默认启用。
-
-    Returns:
-        编译完成的 LangGraph 实例。
+    当前版本使用显式单节点结构：
+    ``START -> chat_agent -> END``。
+    工具调用能力暂时关闭，后续如需恢复，应在这里重新显式增加工具节点与路由。
     """
 
     workflow = StateGraph(ChatAgentState)
@@ -32,9 +28,10 @@ def build_chat_agent(
     workflow.set_entry_point("chat_agent")
     workflow.add_edge("chat_agent", END)
 
-    compile_kwargs: dict[str, Any] = {}
+    compile_kwargs: dict[str, Any] = {
+        "store": store,
+        "name": "chat_agent",
+    }
     if checkpointer is not None:
         compile_kwargs["checkpointer"] = checkpointer
-    _ = store
     return workflow.compile(**compile_kwargs)
-

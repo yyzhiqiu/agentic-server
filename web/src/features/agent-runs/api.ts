@@ -2,6 +2,7 @@ import type {
   AgentRunDetail,
   AgentRunListResponse,
   AgentRunListItem,
+  AgentRunStatus,
   AgentRunToolCall,
 } from "@/features/agent-runs/types";
 import { apiRequest } from "@/shared/api/client";
@@ -45,6 +46,13 @@ type BackendAgentRunDetail = BackendAgentRunListItem & {
   output: Record<string, unknown>;
   metadata: Record<string, unknown>;
   tool_calls: BackendAgentRunToolCall[];
+};
+
+type BackendAgentStatus = {
+  status: AgentRunStatus | "idle";
+  run_id: string | null;
+  agent_id: string | null;
+  metadata: Record<string, unknown>;
 };
 
 function readAgentId(
@@ -112,4 +120,50 @@ export function getAgentRunDetail(runId: string) {
     metadata: data.metadata,
     toolCalls: data.tool_calls.map(mapToolCall),
   }));
+}
+
+function postAgentControl(
+  path: string,
+  payload: Record<string, unknown>,
+) {
+  return apiRequest<BackendAgentStatus>(path, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function resumeAgentRun(
+  runId: string,
+  agentId?: string | null,
+  input: Record<string, unknown> = {},
+) {
+  return postAgentControl(API_ENDPOINTS.agentResume, {
+    run_id: runId,
+    agent_id: agentId ?? undefined,
+    input,
+  });
+}
+
+export function interruptAgentRun(
+  runId: string,
+  agentId?: string | null,
+  reason?: string,
+) {
+  return postAgentControl(API_ENDPOINTS.agentInterrupt, {
+    run_id: runId,
+    agent_id: agentId ?? undefined,
+    reason,
+  });
+}
+
+export function cancelAgentRun(
+  runId: string,
+  agentId?: string | null,
+  reason?: string,
+) {
+  return postAgentControl(API_ENDPOINTS.agentCancel, {
+    run_id: runId,
+    agent_id: agentId ?? undefined,
+    reason,
+  });
 }

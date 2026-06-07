@@ -10,6 +10,6 @@ def test_access_log_records_request_metadata(client, caplog) -> None:
 
     assert response.status_code == 200
     assert any(
-        "method=GET" in message and "path=/health" in message and "status_code=200" in message
+        "请求方法=GET" in message and "路径=/health" in message and "状态码=200" in message
         for message in caplog.messages
     )

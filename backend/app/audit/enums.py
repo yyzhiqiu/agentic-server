@@ -11,6 +11,7 @@ class AuditAction(str, Enum):
     FILE_UPLOAD = "file_upload"
     AGENT_RESUME = "agent_resume"
     AGENT_INTERRUPT = "agent_interrupt"
+    AGENT_CANCEL = "agent_cancel"
 
 
 class AuditResult(str, Enum):

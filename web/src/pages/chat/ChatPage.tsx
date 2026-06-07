@@ -153,12 +153,13 @@ export function ChatPage() {
       return;
     }
 
+    const latestUserMessage: ApiChatMessage = {
+      role: "user",
+      content,
+    };
     const nextMessages: ApiChatMessage[] = [
       ...messages,
-      {
-        role: "user",
-        content,
-      },
+      latestUserMessage,
     ];
 
     setErrorMessage(null);
@@ -171,7 +172,7 @@ export function ChatPage() {
       const response = await chatMutation.mutateAsync({
         agentId: selectedAgentId,
         payload: {
-          messages: nextMessages,
+          messages: [latestUserMessage],
           conversationId: conversationId ?? undefined,
           taskType: selectedAgentId === "code_agent" ? "code_assist" : undefined,
         },
@@ -195,12 +196,13 @@ export function ChatPage() {
       return;
     }
 
+    const latestUserMessage: ApiChatMessage = {
+      role: "user",
+      content,
+    };
     const nextMessages: ApiChatMessage[] = [
       ...messages,
-      {
-        role: "user",
-        content,
-      },
+      latestUserMessage,
     ];
 
     setErrorMessage(null);
@@ -215,7 +217,7 @@ export function ChatPage() {
         {
           agentId: selectedAgentId,
           payload: {
-            messages: nextMessages,
+            messages: [latestUserMessage],
             conversationId: conversationId ?? undefined,
             taskType: selectedAgentId === "code_agent" ? "code_assist" : undefined,
           },

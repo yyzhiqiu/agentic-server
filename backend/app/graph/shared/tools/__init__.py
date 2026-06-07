@@ -3,6 +3,7 @@
 from app.graph.shared.tools.calculator import calculator_tool
 from app.graph.shared.tools.database import database_tool
 from app.graph.shared.tools.file import file_tool
+from app.graph.shared.tools.get_time import get_time
 from app.graph.shared.tools.search import search_tool
 
 __all__ = [
@@ -10,5 +11,5 @@ __all__ = [
     "database_tool",
     "file_tool",
     "search_tool",
+    "get_time",
 ]
-

@@ -19,6 +19,7 @@
 - `GET /v1/agent/status`
 - `POST /v1/agent/resume`
 - `POST /v1/agent/interrupt`
+- `POST /v1/agent/cancel`
 - `POST /v1/conversations`
 - `GET /v1/conversations`
 - `GET /v1/conversations/{conversation_id}`
@@ -38,9 +39,11 @@
 - `POST /v1/chat` 与 `POST /v1/chat/stream` 作为兼容入口保留，默认映射到 `chat_agent`。
 - `conversations` 与 `agent_runs` 现已将 `agent_id` 持久化为正式字段，`metadata.agent_id` 仅保留为兼容旧数据与旧链路时的兜底来源。
 - `documents`：已经具备一条最小可用的文档处理基础链路。上传文件后会先登记 `documents` 记录，随后可通过 `app.tasks.document_indexing.index_document()` 将文本类文件读取为规范化文本，并把 `documents.metadata.status` 与 `files.metadata.document_status` 更新为 `indexed`。
-- `agent`：轻量 Agent Run 状态写入、恢复、中断，以及运行记录列表/详情查询；`resume` / `interrupt` 成功路径现在也会写入 `audit_logs`。
+- `agent`：轻量 Agent Run 状态写入、恢复、可恢复中断、彻底取消，以及运行记录列表/详情查询；`resume` / `interrupt` / `cancel` 成功路径现在也会写入 `audit_logs`。
 - `POST /v1/chat`：会话解析、消息写入、Agent Run 记录与审计事件，成功路径会通过数据库 writer 落库到 `audit_logs`。
 - `POST /v1/chat/stream`：SSE 输出与基础会话 / 消息 / Agent Run 持久化编排。
+
+当前聊天链路已经切换到标准 LangGraph checkpoint 模式：默认以会话级 `conversation_id` 作为 `thread_id` 持久化 `messages` 状态，普通对话只提交本轮增量消息，历史上下文优先由 checkpoint 恢复，数据库中的消息记录主要用于前端展示、审计与旧会话初始化回填。
 
 `GET /v1/conversations/{conversation_id}` 也会返回该会话已持久化的消息列表，方便前端会话详情页直接消费。
 如果前端只需要独立读取消息历史，也可以直接使用 `GET /v1/conversations/{conversation_id}/messages` 获取分页消息列表。
@@ -102,6 +105,26 @@ uvicorn app.main:app --reload
 `POST /v1/files/upload` 会先把上传字节写入对象存储，再持久化 `files.storage_key` 和存储状态元数据，同时登记一条初始 `documents` 记录，并在文件元数据里回填 `document_id` 与 `document_status`。
 `GET /ready` 也会返回 `object_storage` 状态块，用于区分“对象存储已禁用”“对象存储可用”以及“对象存储已启用但当前不可用”三种情况。
 最小文档索引流程目前只支持文本类文件：`text/plain`、`text/markdown`、`application/json`、`application/xml`、`text/csv`。这一步先保证基础链路稳定，同时为 PDF、DOCX 或图片等 richer parser 扩展预留边界。
+
+## Agent 运行控制
+
+当前 Agent Run 控制接口采用标准 LangGraph checkpoint 语义组织状态与恢复点：
+
+- `thread_id` 默认绑定到会话级 `conversation_id`，用于承载同一会话的 checkpoint 状态。
+- `run_id` 仅用于运行控制、审计和详情查询，不再承载多轮记忆。
+- `POST /v1/chat` 与 `POST /v1/chat/stream` 在普通对话场景只提交本轮增量消息，旧消息由 checkpoint 恢复。
+- `POST /v1/agent/interrupt`：尝试停止当前运行，并把状态落为 `interrupted`。如果 checkpoint 可用，后续允许恢复。
+- `POST /v1/agent/resume`：仅允许恢复 `interrupted` 状态的运行，会从最近一次 checkpoint 继续执行，而不是新建一条运行；如果底层不存在可恢复 checkpoint，会直接拒绝恢复。
+- `POST /v1/agent/cancel`：彻底取消当前运行，把状态落为 `cancelled`，后续不再允许恢复。
+- 为兼容历史中断运行，恢复时会优先读取会话级 thread，必要时再回退到旧的 `run_id` thread。
+
+与运行控制相关的环境变量如下：
+
+- `AGENT_CHECKPOINT_ENABLED`：是否启用 LangGraph checkpoint 初始化。
+- `AGENT_CHECKPOINT_URL`：可选的独立 checkpoint 连接串；留空时默认复用 `DATABASE_URL`，并自动转换为 `psycopg` 可用格式。
+- `AGENT_CHECKPOINT_CONNECT_TIMEOUT_SECONDS`：PostgreSQL checkpoint 初始化超时时间，避免本地数据库不可用时长时间阻塞启动。
+
+如果 PostgreSQL checkpoint 初始化失败，系统会自动降级为进程内内存 checkpoint，便于本地调试；但这种降级不适合依赖进程重启后的真实恢复能力。
 
 ## 数据库迁移
 

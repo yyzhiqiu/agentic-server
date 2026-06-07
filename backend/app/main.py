@@ -6,7 +6,32 @@
 
 from __future__ import annotations
 
+import asyncio
+import sys
+import warnings
+
 from app.core.app_factory import create_app
 
+
+def _configure_windows_event_loop_policy() -> None:
+    """在 Windows 上切换为 SelectorEventLoopPolicy 以兼容异步 checkpoint。"""
+
+    if sys.platform != "win32":
+        return
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        policy_factory = getattr(asyncio, "WindowsSelectorEventLoopPolicy", None)
+        if policy_factory is None:
+            return
+
+        current_policy = asyncio.get_event_loop_policy()
+        if isinstance(current_policy, policy_factory):
+            return
+
+        asyncio.set_event_loop_policy(policy_factory())
+
+
+_configure_windows_event_loop_policy()
 
 app = create_app()
