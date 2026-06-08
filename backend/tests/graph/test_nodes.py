@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import pytest
-from langchain_core.messages import HumanMessage
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.graph.chat_agent.nodes import create_chat_agent_node
 from app.graph.code_agent.nodes import (
@@ -14,6 +15,14 @@ from app.graph.code_agent.nodes import (
 )
 
 
+class _ToolCapableFakeMessagesListChatModel(FakeMessagesListChatModel):
+    """为节点测试提供最小可用的工具绑定能力。"""
+
+    def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+        del tools, tool_choice, kwargs
+        return self
+
+
 @pytest.mark.asyncio
 async def test_chat_agent_node_returns_mock_message_without_llm() -> None:
     node = create_chat_agent_node(None)
@@ -23,6 +32,39 @@ async def test_chat_agent_node_returns_mock_message_without_llm() -> None:
 
     assert result["messages"][-1].type == "ai"
     assert "chat_agent" in result["messages"][-1].content
+
+
+@pytest.mark.asyncio
+async def test_chat_agent_node_preserves_tool_call_message_chain() -> None:
+    node = create_chat_agent_node(
+        _ToolCapableFakeMessagesListChatModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "get_time",
+                            "args": {"query": "now"},
+                            "id": "call_1",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                AIMessage(content="现在时间是 2026-06-09 12:00:00"),
+            ]
+        )
+    )
+    state = {"messages": [HumanMessage(content="现在几点")], "metadata": {}}
+
+    result = await node(state)
+
+    assert len(result["messages"]) == 3
+    assert isinstance(result["messages"][0], AIMessage)
+    assert result["messages"][0].tool_calls[0]["name"] == "get_time"
+    assert isinstance(result["messages"][1], ToolMessage)
+    assert result["messages"][1].tool_call_id == "call_1"
+    assert isinstance(result["messages"][2], AIMessage)
+    assert "现在时间是" in result["messages"][2].content
 
 
 @pytest.mark.asyncio

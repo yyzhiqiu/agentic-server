@@ -1,24 +1,27 @@
 """通用聊天 Agent 的节点实现。
 
-本模块负责显式构建聊天模型节点：它会把当前 ``messages`` 状态与
-系统提示词组装成一次模型调用输入，并返回单条 assistant 消息。
-当前版本不启用工具调用循环，后续如需恢复工具能力，应在 graph 层
-显式增加 ``ToolNode`` 与配套路由。
+本模块负责在外层 LangGraph 单节点结构中封装一个支持工具调用的内部 Agent。
+节点会把当前 ``messages`` 状态传给内部 Agent，让其按需执行工具调用循环，
+再仅把本轮新增的消息增量写回外层状态，避免丢失 ``ToolMessage`` 链路，也
+避免在请求期间重复构建 Agent。
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
+from langchain.agents import create_agent
+from langchain_core.messages import AIMessage, BaseMessage
 
 from app.graph.chat_agent.prompts import CHAT_AGENT_SYSTEM_PROMPT
 from app.graph.chat_agent.state import ChatAgentState
+from app.graph.chat_agent.tools import get_chat_agent_tools
 from app.graph.shared.messages import (
     message_like_to_langchain_message,
     read_message_content,
     read_message_role,
 )
+from app.graph.shared.tools import get_time
 from app.observability.decorators import observe_node
 
 
@@ -31,21 +34,29 @@ def _last_user_content(messages: list[Any]) -> str:
     return ""
 
 
-def _build_llm_messages(messages: list[Any]) -> list[BaseMessage]:
-    """把状态中的消息组装为一次模型调用输入。"""
+def _build_agent_input_messages(messages: list[Any]) -> list[BaseMessage]:
+    """把状态中的消息规整为内部 Agent 可消费的 LangChain 消息。"""
 
-    converted = [SystemMessage(content=CHAT_AGENT_SYSTEM_PROMPT)]
-    converted.extend(message_like_to_langchain_message(message) for message in messages)
-    return converted
+    return [message_like_to_langchain_message(message) for message in messages]
 
 
-def _normalize_model_response(response: BaseMessage) -> AIMessage:
-    """把模型返回值规整为 ``AIMessage``。"""
+def _extract_appended_messages(
+        original_messages: list[Any],
+        result_messages: Any,
+) -> list[BaseMessage]:
+    """提取内部 Agent 相对输入新增的消息增量。
 
-    if isinstance(response, AIMessage):
-        return AIMessage(content=read_message_content(response))
+    内部 ``create_agent`` 返回的是完整消息链路，外层 ``MessagesState`` 只应
+    追加本轮新增消息，才能保留工具调用轨迹并维持外层状态合并语义稳定。
+    """
 
-    return AIMessage(content=read_message_content(response))
+    if not isinstance(result_messages, list):
+        return []
+
+    return [
+        message_like_to_langchain_message(message)
+        for message in result_messages[len(original_messages) - 1:]
+    ]
 
 
 def create_chat_agent_node(llm: Any | None = None):
@@ -55,11 +66,20 @@ def create_chat_agent_node(llm: Any | None = None):
         messages: 当前多轮消息上下文。
 
     Writes:
-        messages: 追加一条 assistant 消息。
+        messages: 追加本轮新增的 assistant 与 tool 消息。
 
     Side Effects:
-        当 ``llm`` 可用时，可能调用外部模型服务。
+        当 ``llm`` 可用时，会调用外部模型服务，并可能触发工具调用。
     """
+
+    tool_enabled_agent = None
+    if llm is not None:
+        tool_enabled_agent = create_agent(
+            model=llm,
+            tools=get_chat_agent_tools(),
+            system_prompt=CHAT_AGENT_SYSTEM_PROMPT,
+            name="chat_agent_inner",
+        )
 
     @observe_node("chat_agent")
     async def chat_agent_node(state: ChatAgentState) -> ChatAgentState:
@@ -71,7 +91,14 @@ def create_chat_agent_node(llm: Any | None = None):
             )
             return {"messages": [AIMessage(content=content)]}
 
-        response = await llm.ainvoke(_build_llm_messages(messages))
-        return {"messages": [_normalize_model_response(response)]}
+        response = await tool_enabled_agent.ainvoke(
+            {"messages": _build_agent_input_messages(messages)}
+        )
+        return {
+            "messages": _extract_appended_messages(
+                messages,
+                response.get("messages", []),
+            )
+        }
 
     return chat_agent_node
