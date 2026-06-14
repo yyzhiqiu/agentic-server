@@ -600,3 +600,6 @@ pnpm compose:dev
 - 后端内部持续保持 `app.xxx` import 约定
 - 前端持续保持 `pages/`、`features/`、`shared/` 三层边界
 - 目录结构、启动命令、部署入口变动时同步更新 README 和 `docs/`
+
+<img width="2880" height="1547" alt="image" src="https://github.com/user-attachments/assets/382ff207-9d79-4a48-8e5b-5cb6daa761d3" />
+
