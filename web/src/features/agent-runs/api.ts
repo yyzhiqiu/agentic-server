@@ -21,6 +21,8 @@ type BackendAgentRunListItem = {
   error_message: string | null;
   error_code: string | null;
   interruption_reason: string | null;
+  pending_human_input?: Record<string, unknown> | null;
+  interrupt_source?: string | null;
 };
 
 type BackendAgentRunToolCall = {
@@ -82,6 +84,12 @@ function mapAgentRunListItem(run: BackendAgentRunListItem): AgentRunListItem {
     errorMessage: run.error_message,
     errorCode: run.error_code,
     interruptionReason: run.interruption_reason,
+    pendingHumanInput:
+      run.pending_human_input && typeof run.pending_human_input === "object"
+        ? run.pending_human_input
+        : null,
+    interruptSource:
+      typeof run.interrupt_source === "string" ? run.interrupt_source : null,
   };
 }
 
@@ -100,8 +108,16 @@ function mapToolCall(toolCall: BackendAgentRunToolCall): AgentRunToolCall {
   };
 }
 
-export function getAgentRuns() {
-  return apiRequest<BackendAgentRunListResponse>(API_ENDPOINTS.agentRuns).then<
+export function getAgentRuns(conversationId?: string) {
+  const params = new URLSearchParams();
+  if (conversationId) {
+    params.set("conversation_id", conversationId);
+  }
+  const path = params.size > 0
+    ? `${API_ENDPOINTS.agentRuns}?${params.toString()}`
+    : API_ENDPOINTS.agentRuns;
+
+  return apiRequest<BackendAgentRunListResponse>(path).then<
     AgentRunListResponse
   >((data) => ({
     items: data.items.map(mapAgentRunListItem),

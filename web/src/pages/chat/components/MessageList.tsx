@@ -4,6 +4,7 @@ type Message = {
   id: string;
   role: string;
   content: string;
+  pending?: boolean;
 };
 
 type MessageListProps = {
@@ -18,6 +19,7 @@ export function MessageList({ messages }: MessageListProps) {
           key={message.id}
           content={message.content}
           role={message.role}
+          pending={message.pending}
         />
       ))}
     </div>

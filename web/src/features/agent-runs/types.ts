@@ -32,6 +32,8 @@ export type AgentRunListItem = {
   errorMessage: string | null;
   errorCode: string | null;
   interruptionReason: string | null;
+  pendingHumanInput: Record<string, unknown> | null;
+  interruptSource: string | null;
 };
 
 export type AgentRunListResponse = {

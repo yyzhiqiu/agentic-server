@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     LLM_TIMEOUT: int = 60
     LLM_MAX_RETRIES: int = 2
 
+    AMAP_MCP_BASE_URL: str = "https://mcp.amap.com/mcp"
+    AMAP_MCP_KEY: str = ""
+    AMAP_MCP_TIMEOUT_SECONDS: int = 30
+
     LANGFUSE_ENABLED: bool = False
     LANGFUSE_PUBLIC_KEY: str = ""
     LANGFUSE_SECRET_KEY: str = ""
@@ -80,7 +84,7 @@ class Settings(BaseSettings):
             raise ValueError("setting value must not be empty")
         return normalized
 
-    @field_validator("AGENT_CHECKPOINT_URL", "LLM_BASE_URL", mode="before")
+    @field_validator("AGENT_CHECKPOINT_URL", "LLM_BASE_URL", "AMAP_MCP_BASE_URL", mode="before")
     @classmethod
     def normalize_optional_strings(cls, value: Any) -> str | None:
         if value is None:
@@ -100,11 +104,11 @@ class Settings(BaseSettings):
             return normalized
         raise ValueError("OBJECT_STORAGE_BACKEND must be one of: local, disabled")
 
-    @field_validator("AGENT_CHECKPOINT_CONNECT_TIMEOUT_SECONDS")
+    @field_validator("AGENT_CHECKPOINT_CONNECT_TIMEOUT_SECONDS", "AMAP_MCP_TIMEOUT_SECONDS")
     @classmethod
     def validate_checkpoint_timeout(cls, value: int) -> int:
         if value <= 0:
-            raise ValueError("AGENT_CHECKPOINT_CONNECT_TIMEOUT_SECONDS must be greater than 0")
+            raise ValueError("timeout setting must be greater than 0")
         return value
 
     @field_validator("CORS_ORIGINS", mode="before")

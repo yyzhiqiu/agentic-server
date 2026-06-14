@@ -3,10 +3,13 @@ import { apiRequest, buildApiUrl } from "@/shared/api/client";
 import { API_ENDPOINTS } from "@/shared/api/endpoints";
 import { readSseStream } from "@/shared/api/stream";
 import { createId } from "@/shared/lib/id";
+import { mapPendingHumanInput } from "@/features/chat/pendingHumanInput";
 
 import type {
+  ChatInterruptPayload,
   ChatMessage,
   ChatRequest,
+  ChatResumeRequest,
   ChatResponse,
   ChatStreamMeta,
   ChatToolCall,
@@ -44,10 +47,11 @@ type BackendChatResponse = {
   messages: BackendChatMessage[];
   metadata: Record<string, unknown>;
   tool_calls: BackendChatToolCall[];
+  pending_human_input?: unknown;
 };
 
 type BackendChatStreamEvent = {
-  type: "start" | "message" | "error" | "done";
+  type: "start" | "message" | "interrupt" | "error" | "done";
   content?: string | null;
   data: Record<string, unknown>;
 };
@@ -102,6 +106,7 @@ function mapChatResponse(data: BackendChatResponse): ChatResponse {
     messages: data.messages.map(mapChatMessage),
     metadata: data.metadata,
     toolCalls: data.tool_calls.map(mapToolCall),
+    pendingHumanInput: mapPendingHumanInput(data.pending_human_input),
   };
 }
 
@@ -134,6 +139,7 @@ function parseStreamEvent(raw: string): BackendChatStreamEvent {
 type StreamChatCallbacks = {
   onStart?: (meta: ChatStreamMeta) => void;
   onMessage?: (content: string) => void;
+  onInterrupt?: (payload: ChatInterruptPayload) => void;
   onDone?: (response: ChatResponse) => void;
   onError?: (error: ApiError) => void;
 };
@@ -150,6 +156,16 @@ export function sendChat(payload: ChatRequest) {
   }).then<ChatResponse>(mapChatResponse);
 }
 
+export function resumeChat(payload: ChatResumeRequest) {
+  return apiRequest<BackendChatResponse>(API_ENDPOINTS.chatResume, {
+    method: "POST",
+    body: JSON.stringify({
+      run_id: payload.runId,
+      input: payload.input,
+    }),
+  }).then<ChatResponse>(mapChatResponse);
+}
+
 export function sendAgentChat({ agentId, payload }: AgentChatInput) {
   return apiRequest<BackendChatResponse>(API_ENDPOINTS.agentChat(agentId), {
     method: "POST",
@@ -161,13 +177,29 @@ export async function streamChat(
   payload: ChatRequest,
   callbacks: StreamChatCallbacks,
 ) {
-  return streamAgentChat(
-    {
-      agentId: "chat_agent",
-      payload,
-    },
-    callbacks,
-  );
+  const response = await fetch(buildApiUrl(API_ENDPOINTS.chatStream), {
+    method: "POST",
+    headers: buildStreamHeaders(),
+    body: JSON.stringify(buildChatRequest(payload)),
+  });
+
+  return consumeStreamResponse(response, callbacks);
+}
+
+export async function streamResumeChat(
+  payload: ChatResumeRequest,
+  callbacks: StreamChatCallbacks,
+) {
+  const response = await fetch(buildApiUrl(API_ENDPOINTS.chatResumeStream), {
+    method: "POST",
+    headers: buildStreamHeaders(),
+    body: JSON.stringify({
+      run_id: payload.runId,
+      input: payload.input,
+    }),
+  });
+
+  return consumeStreamResponse(response, callbacks);
 }
 
 export async function streamAgentChat(
@@ -177,9 +209,16 @@ export async function streamAgentChat(
   const response = await fetch(buildApiUrl(API_ENDPOINTS.agentChatStream(input.agentId)), {
     method: "POST",
     headers: buildStreamHeaders(),
-    body: JSON.stringify(buildChatRequest(input.payload)),
+      body: JSON.stringify(buildChatRequest(input.payload)),
   });
 
+  return consumeStreamResponse(response, callbacks);
+}
+
+async function consumeStreamResponse(
+  response: Response,
+  callbacks: StreamChatCallbacks,
+) {
   if (!response.ok) {
     throw new ApiError(`Request failed: ${response.status}`, response.status, {
       traceId: response.headers.get("X-Trace-Id") ?? undefined,
@@ -197,6 +236,20 @@ export async function streamAgentChat(
 
     if (eventName === "message") {
       callbacks.onMessage?.(event.content ?? "");
+      return;
+    }
+
+    if (eventName === "interrupt") {
+      const pendingHumanInput = mapPendingHumanInput(event.data.pending_human_input);
+      const meta = readStreamMeta(event.data);
+      if (pendingHumanInput) {
+        callbacks.onInterrupt?.({
+          pendingHumanInput,
+          conversationId: meta.conversationId,
+          runId: meta.runId,
+          agentId: meta.agentId,
+        });
+      }
       return;
     }
 

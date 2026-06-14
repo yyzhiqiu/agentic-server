@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from langchain.agents import create_agent
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 
 from app.graph.chat_agent.prompts import CHAT_AGENT_SYSTEM_PROMPT
 from app.graph.chat_agent.state import ChatAgentState
@@ -55,8 +55,40 @@ def _extract_appended_messages(
 
     return [
         message_like_to_langchain_message(message)
-        for message in result_messages[len(original_messages) - 1:]
+        for message in result_messages[len(original_messages):]
     ]
+
+
+def _supports_tool_binding(llm: Any) -> bool:
+    """判断模型是否支持 LangChain Agent 所需的工具绑定能力。
+
+    Why:
+        测试替身和部分轻量模型继承了 ``bind_tools`` 方法但默认抛出
+        ``NotImplementedError``。这种情况下仍应允许通用聊天直接调用模型，
+        不能因为工具绑定不可用而让整个 chat_agent 失败。
+    """
+
+    bind_tools = getattr(llm, "bind_tools", None)
+    if bind_tools is None:
+        return False
+
+    try:
+        bind_tools(get_chat_agent_tools())
+    except NotImplementedError:
+        return False
+    return True
+
+
+async def _invoke_plain_llm(llm: Any, messages: list[Any]) -> list[BaseMessage]:
+    """在工具绑定不可用时直接调用模型并返回新增回复。"""
+
+    response = await llm.ainvoke(
+        [
+            SystemMessage(content=CHAT_AGENT_SYSTEM_PROMPT),
+            *_build_agent_input_messages(messages),
+        ]
+    )
+    return [message_like_to_langchain_message(response)]
 
 
 def create_chat_agent_node(llm: Any | None = None):
@@ -73,7 +105,7 @@ def create_chat_agent_node(llm: Any | None = None):
     """
 
     tool_enabled_agent = None
-    if llm is not None:
+    if llm is not None and _supports_tool_binding(llm):
         tool_enabled_agent = create_agent(
             model=llm,
             tools=get_chat_agent_tools(),
@@ -90,6 +122,9 @@ def create_chat_agent_node(llm: Any | None = None):
                 f"LLM 未配置，已收到你的消息：{_last_user_content(messages)}"
             )
             return {"messages": [AIMessage(content=content)]}
+
+        if tool_enabled_agent is None:
+            return {"messages": await _invoke_plain_llm(llm, messages)}
 
         response = await tool_enabled_agent.ainvoke(
             {"messages": _build_agent_input_messages(messages)}

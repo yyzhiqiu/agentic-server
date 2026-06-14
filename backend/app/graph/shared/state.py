@@ -13,3 +13,4 @@ class BaseAgentState(MessagesState, total=False):
     user_id: str | None
     conversation_id: str | None
     metadata: dict[str, Any]
+    human_input: dict[str, Any] | None

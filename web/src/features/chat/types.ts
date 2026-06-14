@@ -1,5 +1,32 @@
 export type ChatRole = "system" | "user" | "assistant" | "tool";
 
+export type HumanInputOption = {
+  label: string;
+  value: string;
+};
+
+export type HumanInputField = {
+  name: string;
+  label: string;
+  type: "text" | "select";
+  required: boolean;
+  placeholder?: string | null;
+  value?: string | null;
+  allowCustom?: boolean;
+  customOptionLabel?: string | null;
+  customPlaceholder?: string | null;
+  options: HumanInputOption[];
+};
+
+export type PendingHumanInput = {
+  kind: "form";
+  title: string;
+  message: string;
+  fields: HumanInputField[];
+  submitLabel: string;
+  missingFields: string[];
+};
+
 export type ChatMessage = {
   id?: string;
   role: ChatRole;
@@ -18,6 +45,11 @@ export type ChatRequest = {
   taskType?: string | null;
 };
 
+export type ChatResumeRequest = {
+  runId: string;
+  input: Record<string, unknown>;
+};
+
 export type ChatToolCall = {
   toolName: string;
   status: string;
@@ -33,9 +65,17 @@ export type ChatResponse = {
   messages: ChatMessage[];
   metadata: Record<string, unknown>;
   toolCalls: ChatToolCall[];
+  pendingHumanInput: PendingHumanInput | null;
 };
 
 export type ChatStreamMeta = {
+  conversationId: string | null;
+  runId: string | null;
+  agentId: string | null;
+};
+
+export type ChatInterruptPayload = {
+  pendingHumanInput: PendingHumanInput;
   conversationId: string | null;
   runId: string | null;
   agentId: string | null;

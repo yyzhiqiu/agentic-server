@@ -18,6 +18,13 @@
 8. 注释应该帮助后续维护者理解业务意图、设计取舍、边界条件和风险点。
 9. 所有的注释应该用中文编写
 
+## 修改已有代码时优先补什么
+
+1. 先检查已有 docstring 是否还和当前行为一致，不一致就先修正。
+2. 优先补状态流转、恢复逻辑、事务边界、降级策略，不要先补表层流程描述。
+3. 如果一个函数跨越多个层级概念，例如“持久化 + graph 恢复 + 前端协议兼容”，必须解释这样做的原因。
+4. 行内注释只放在维护者最容易误判的分支附近，避免把整段代码注释成自然语言。
+
 ## 模块级 Docstring
 
 以下模块必须写模块级 docstring：
@@ -227,6 +234,35 @@ async def agent_node(state: AgentState) -> dict[str, Any]:
     """
 ```
 
+### 人机交互 / 恢复节点
+
+如果节点涉及 `interrupt`、`resume`、checkpoint、表单补参，额外说明：
+
+1. 补参值从哪里读取，例如 `human_input` 或 `metadata.resume_payload`。
+2. 合并完成后是否会清理一次性字段，避免重复消费。
+3. 为什么当前分支返回“待补参”而不是直接抛异常。
+4. 完成态是否需要清理 `pending_human_input`、`interrupt_source` 等中断痕迹。
+
+示例：
+
+```python
+async def resume_merge_node(state: AgentState) -> dict[str, Any]:
+    """合并用户补参并清理一次性恢复载荷。
+
+    Reads:
+        human_input: 当前恢复动作提交的结构化表单值。
+        metadata: 兼容旧版恢复协议时使用的补参载荷。
+
+    Writes:
+        origin_text / destination_text / travel_mode: 合并后的最新槽位。
+        human_input: 清空，避免同一份表单被后续节点重复消费。
+
+    Notes:
+        补参失败属于可恢复业务分支，应通过缺失字段和校验错误引导用户继续输入，
+        不应直接抛出系统异常。
+    """
+```
+
 ### Routing
 
 所有条件路由函数必须说明每个分支的含义。
@@ -296,6 +332,15 @@ async def delete_conversation(self, conversation_id: str, user_id: str) -> None:
     Repository 只执行数据访问，不主动 commit。
     """
 ```
+
+### 会话 / 恢复编排
+
+如果 Service 同时处理消息持久化、运行记录、checkpoint 恢复，docstring 应补充：
+
+1. 当前方法操作的是“会话视图”还是“LangGraph thread”。
+2. 是否需要把结构化输入同步落成普通消息，以保证历史可见。
+3. 为什么要选择某个 graph 或 thread 恢复，而不是直接复用默认入口。
+4. 哪些元数据只属于中断态，成功后必须清理。
 
 ## 外部集成专项规范
 

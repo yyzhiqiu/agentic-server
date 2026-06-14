@@ -65,6 +65,8 @@ class AgentRunListItem(BaseModel):
     error_message: str | None = None
     error_code: str | None = None
     interruption_reason: str | None = None
+    pending_human_input: dict[str, Any] | None = None
+    interrupt_source: str | None = None
 
 
 class AgentRunDetail(AgentRunListItem):

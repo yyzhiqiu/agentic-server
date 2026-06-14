@@ -7,8 +7,10 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.types import Command, GraphOutput
 
 from app.common.exceptions import GraphException, LLMException
+from app.graph.shared.human_input import normalize_pending_human_input
 from app.graph.shared.messages import (
     chat_message_to_langchain_message,
     message_like_to_chat_message,
@@ -45,6 +47,18 @@ class GraphRunner:
         if thread_id is None:
             return None
         return {"configurable": {"thread_id": thread_id}}
+
+    @staticmethod
+    def _build_resume_command(request: ChatRequest) -> Command | None:
+        """从恢复请求里提取可传给 LangGraph 的 resume 命令。"""
+
+        resume_payload = request.metadata.get("resume_payload")
+        if not isinstance(resume_payload, dict):
+            return None
+        input_payload = resume_payload.get("input")
+        if input_payload is None:
+            return None
+        return Command(resume=input_payload)
 
     @staticmethod
     def _call_signature_mismatch(exc: TypeError) -> bool:
@@ -279,10 +293,142 @@ class GraphRunner:
                 return value
         return None
 
-    def _response_from_result(self, result: dict[str, Any], request: ChatRequest) -> ChatResponse:
+    @staticmethod
+    def _extract_interrupt_chunk(event: dict[str, Any]) -> list[Any]:
+        """从 LangGraph 流事件中提取中断负载。"""
+
+        chunk = event.get("data", {}).get("chunk")
+        if not isinstance(chunk, dict):
+            return []
+        interrupts = chunk.get("__interrupt__")
+        if not isinstance(interrupts, tuple | list):
+            return []
+        return list(interrupts)
+
+    @staticmethod
+    def _result_value(result: dict[str, Any] | GraphOutput) -> dict[str, Any]:
+        """兼容 GraphOutput 与旧版 dict 结果。"""
+
+        if isinstance(result, GraphOutput):
+            value = result.value
+            if isinstance(value, dict):
+                return dict(value)
+            return {"value": value}
+        return dict(result)
+
+    @staticmethod
+    def _result_interrupts(result: dict[str, Any] | GraphOutput) -> list[Any]:
+        """兼容 GraphOutput 与旧版 dict 结果中的中断信息。"""
+
+        if isinstance(result, GraphOutput):
+            return list(result.interrupts)
+        interrupts = result.get("__interrupt__")
+        if isinstance(interrupts, tuple | list):
+            return list(interrupts)
+        return []
+
+    @staticmethod
+    def _snapshot_values(snapshot: Any | None) -> dict[str, Any]:
+        """从不同形态的 checkpoint 快照中提取 ``values`` 负载。"""
+
+        if snapshot is None:
+            return {}
+
+        values = getattr(snapshot, "values", None)
+        if isinstance(values, dict):
+            return dict(values)
+
+        if isinstance(snapshot, dict):
+            raw_values = snapshot.get("values")
+            if isinstance(raw_values, dict):
+                return dict(raw_values)
+            return dict(snapshot)
+
+        return {}
+
+    @classmethod
+    def _message_count(cls, candidate: dict[str, Any] | GraphOutput | None) -> int:
+        """统计候选结果里原始消息数组的长度，用于选择更完整的状态。"""
+
+        if candidate is None:
+            return 0
+
+        normalized = cls._result_value(candidate) if isinstance(candidate, GraphOutput) else dict(candidate)
+        raw_messages = normalized.get("messages")
+        return len(raw_messages) if isinstance(raw_messages, list) else 0
+
+    @classmethod
+    def _merge_result_with_snapshot(
+        cls,
+        result: dict[str, Any] | GraphOutput | None,
+        snapshot: Any | None,
+    ) -> dict[str, Any]:
+        """用 checkpoint 快照补全图结果，优先保留消息更完整的一侧。"""
+
+        normalized_result = cls._result_value(result) if result is not None else {}
+        snapshot_values = cls._snapshot_values(snapshot)
+        if not snapshot_values:
+            return normalized_result
+
+        merged = dict(snapshot_values)
+        merged.update(normalized_result)
+
+        if cls._message_count(snapshot_values) >= cls._message_count(normalized_result):
+            snapshot_messages = snapshot_values.get("messages")
+            if isinstance(snapshot_messages, list):
+                merged["messages"] = snapshot_messages
+
+        return merged
+
+    @staticmethod
+    def _attach_interrupt_result(
+        result: dict[str, Any],
+        interrupt_payload: Any | None,
+    ) -> dict[str, Any]:
+        """把流式阶段捕获到的中断负载回填到最终结果中。"""
+
+        if interrupt_payload is None:
+            return result
+
+        enriched = dict(result)
+        enriched["__interrupt__"] = (interrupt_payload,)
+        return enriched
+
+    def _append_interrupt_metadata(
+        self,
+        response: ChatResponse,
+        interrupts: list[Any],
+    ) -> ChatResponse:
+        """把 LangGraph 中断结果映射为响应中的待补参协议。"""
+
+        if not interrupts:
+            return response
+
+        pending_human_input = normalize_pending_human_input(interrupts[0])
+        if pending_human_input is None:
+            return response
+
+        metadata = dict(response.metadata)
+        metadata["agent_id"] = response.agent_id or self.agent_id
+        metadata["interrupt_source"] = "human_input"
+        metadata["pending_human_input"] = pending_human_input.model_dump()
+        metadata["resume_available"] = True
+        return response.model_copy(
+            update={
+                "metadata": metadata,
+                "pending_human_input": pending_human_input,
+            }
+        )
+
+    def _response_from_result(
+        self,
+        result: dict[str, Any] | GraphOutput,
+        request: ChatRequest,
+    ) -> ChatResponse:
         """把图执行结果转换为标准聊天响应。"""
 
-        raw_messages = result.get("messages", [])
+        normalized_result = self._result_value(result)
+        raw_messages = normalized_result.get("messages", [])
         messages = self._messages_to_chat_messages(raw_messages)
         assistant_message = self._assistant_message(messages)
         if assistant_message is None:
@@ -291,9 +437,9 @@ class GraphRunner:
                 data={"error": "Graph result does not contain an assistant message"},
             )
 
-        metadata = result.get("metadata")
+        metadata = normalized_result.get("metadata")
         response_metadata = metadata if isinstance(metadata, dict) else {}
-        agent_id = result.get("agent_id")
+        agent_id = normalized_result.get("agent_id")
         if not isinstance(agent_id, str) or not agent_id:
             agent_id = response_metadata.get("agent_id")
         if not isinstance(agent_id, str) or not agent_id:
@@ -301,8 +447,8 @@ class GraphRunner:
         if not isinstance(agent_id, str) or not agent_id:
             agent_id = self.agent_id
 
-        return ChatResponse(
-            conversation_id=result.get("conversation_id") or request.conversation_id,
+        response = ChatResponse(
+            conversation_id=normalized_result.get("conversation_id") or request.conversation_id,
             agent_id=agent_id,
             message=assistant_message,
             messages=messages,
@@ -310,7 +456,11 @@ class GraphRunner:
                 **response_metadata,
                 "agent_id": agent_id,
             },
-            tool_calls=self._tool_calls_from_result(result),
+            tool_calls=self._tool_calls_from_result(normalized_result),
+        )
+        return self._append_interrupt_metadata(
+            response,
+            self._result_interrupts(result),
         )
 
     async def get_state(self, thread_id: str) -> Any | None:
@@ -376,7 +526,11 @@ class GraphRunner:
             )
 
         try:
-            state = None if resume else self._build_state(request, user_id=user_id)
+            state: Any
+            if resume:
+                state = self._build_resume_command(request)
+            else:
+                state = self._build_state(request, user_id=user_id)
             result = await self._invoke_with_fallbacks(
                 self.graph.ainvoke,
                 state,
@@ -388,7 +542,14 @@ class GraphRunner:
                 data={"error": str(exc), "agent_id": self.agent_id},
             ) from exc
 
-        return self._response_from_result(result, request)
+        snapshot = await self.get_state(thread_id) if thread_id is not None else None
+        normalized_result = self._merge_result_with_snapshot(result, snapshot)
+        interrupts = self._result_interrupts(result)
+        normalized_result = self._attach_interrupt_result(
+            normalized_result,
+            interrupts[0] if interrupts else None,
+        )
+        return self._response_from_result(normalized_result, request)
 
     async def stream_chat_events(
         self,
@@ -415,13 +576,22 @@ class GraphRunner:
             )
             return
 
-        state = None if resume else self._build_state(request, user_id=user_id)
         last_content: str | None = None
         final_result: dict[str, Any] | None = None
         latest_state: dict[str, Any] | None = None
+        interrupt_payload: dict[str, Any] | None = None
+        interrupt_result: Any | None = None
         try:
             try:
-                iterator = self._astream_events_with_fallbacks(state, thread_id=thread_id)
+                iterator_input = (
+                    self._build_resume_command(request)
+                    if resume
+                    else self._build_state(request, user_id=user_id)
+                )
+                iterator = self._astream_events_with_fallbacks(
+                    iterator_input,
+                    thread_id=thread_id,
+                )
             except AttributeError:
                 response = await self.run_chat(
                     request,
@@ -440,31 +610,61 @@ class GraphRunner:
             async for event in iterator:
                 if event.get("event") == "on_chain_stream":
                     latest_state = self._extract_state_chunk(event) or latest_state
+                    interrupts = self._extract_interrupt_chunk(event)
+                    if interrupts and interrupt_payload is None:
+                        interrupt_result = interrupts[0]
+                        pending_human_input = normalize_pending_human_input(interrupts[0])
+                        if pending_human_input is not None:
+                            interrupt_payload = pending_human_input.model_dump()
                     if latest_state is None:
-                        continue
-                    messages = self._messages_to_chat_messages(latest_state.get("messages", []))
-                    assistant_message = self._assistant_message(messages)
-                    if (
-                        assistant_message is not None
-                        and assistant_message.content
-                        and assistant_message.content != last_content
-                    ):
-                        last_content = assistant_message.content
-                        yield (
-                            "message",
-                            ChatStreamEvent(type="message", content=assistant_message.content),
-                        )
+                        if not interrupts:
+                            continue
+                    else:
+                        messages = self._messages_to_chat_messages(latest_state.get("messages", []))
+                        assistant_message = self._assistant_message(messages)
+                        if (
+                            assistant_message is not None
+                            and assistant_message.content
+                            and assistant_message.content != last_content
+                        ):
+                            last_content = assistant_message.content
+                            yield (
+                                "message",
+                                ChatStreamEvent(type="message", content=assistant_message.content),
+                            )
 
                 if event.get("event") == "on_chain_end" and event.get("name") == "LangGraph":
                     output = event.get("data", {}).get("output")
                     if isinstance(output, dict):
                         final_result = output
 
-            response = self._response_from_result(final_result or latest_state or {}, request)
+            snapshot = await self.get_state(thread_id) if thread_id is not None else None
+            response_result = self._merge_result_with_snapshot(
+                final_result or latest_state or {},
+                snapshot,
+            )
+            response_result = self._attach_interrupt_result(
+                response_result,
+                interrupt_result,
+            )
+            response = self._response_from_result(response_result, request)
             if response.message.content and response.message.content != last_content:
                 yield (
                     "message",
                     ChatStreamEvent(type="message", content=response.message.content),
+                )
+            if interrupt_payload is not None:
+                yield (
+                    "interrupt",
+                    ChatStreamEvent(
+                        type="interrupt",
+                        content=response.message.content,
+                        data={
+                            "pending_human_input": interrupt_payload,
+                            "agent_id": response.agent_id or self.agent_id,
+                            "conversation_id": response.conversation_id,
+                        },
+                    ),
                 )
             yield ("done", ChatStreamEvent(type="done", data=response.model_dump()))
         except Exception as exc:

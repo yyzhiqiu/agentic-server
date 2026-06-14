@@ -6,5 +6,5 @@ export function Separator({
   className,
   ...props
 }: HTMLAttributes<HTMLHRElement>) {
-  return <hr className={cn("border-slate-200", className)} {...props} />;
+  return <hr className={cn("border-slate-200 dark:border-slate-800", className)} {...props} />;
 }

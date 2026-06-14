@@ -18,11 +18,12 @@
 `POST /v1/files/upload` 与 `DELETE /v1/conversations/{conversation_id}` 的成功路径现在也会通过数据库 writer 写入 `audit_logs`，同时保持审计失败不影响主业务。
 - Agent 控制与查询：`GET /v1/agent/runs`、`GET /v1/agent/runs/{run_id}`、`GET /v1/agent/status`、`POST /v1/agent/resume`、`POST /v1/agent/interrupt`、`POST /v1/agent/cancel`
 `POST /v1/agent/resume`、`POST /v1/agent/interrupt` 与 `POST /v1/agent/cancel` 的成功路径现在也会通过数据库 writer 写入 `audit_logs`，同时保持审计失败不影响主业务。
-- 聊天：`POST /v1/chat`、`POST /v1/chat/stream`
+- 聊天：`POST /v1/chat`、`POST /v1/chat/stream`、`POST /v1/chat/resume`、`POST /v1/chat/resume/stream`
 - 多 Agent 查询与调用：`GET /v1/agents`、`GET /v1/agents/{agent_id}`、`POST /v1/agents/{agent_id}/chat`、`POST /v1/agents/{agent_id}/chat/stream`
 
-当前后端的 Agent 层采用 `Agent Registry + 多个独立 Graph` 结构，对外暴露 `chat_agent` 和 `code_agent` 两个独立能力。它们不是 supervisor 协作关系，也不做 handoff。
-`POST /v1/chat` 与 `POST /v1/chat/stream` 继续保留为兼容入口，默认分别等价于 `POST /v1/agents/chat_agent/chat` 与 `POST /v1/agents/chat_agent/chat/stream`。
+当前后端的 Agent 层采用 `Agent Registry + 多个独立 Graph` 结构，对外暴露 `coordinator_agent`、`chat_agent`、`route_planner_agent` 和 `code_agent` 四个独立能力。它们不是 supervisor handoff 模式，而是通过统一入口 `coordinator_agent` 做自动路由。
+`POST /v1/chat` 与 `POST /v1/chat/stream` 继续保留为兼容入口，默认分别等价于 `coordinator_agent` 的单入口聊天体验。
+`route_planner_agent` 通过共享 `human_interaction_node` 和 LangGraph `interrupt()/Command(resume=...)` 实现补参恢复，高德 MCP 只作为其工具层接入。
 `conversations` 与 `agent_runs` 现在都已提供正式 `agent_id` 字段，`metadata.agent_id` 仅作为兼容旧数据和旧响应链路的兜底来源。
 当前聊天链路已经切换到标准 LangGraph checkpoint 模式：默认用会话级 `conversation_id` 作为 `thread_id`，普通对话只提交本轮增量消息，历史上下文由 checkpoint 恢复，数据库消息主要承担前端展示、审计与旧会话初始化回填职责。
 
@@ -50,11 +51,18 @@
 
 - `thread_id` 默认绑定会话级 `conversation_id`，承载同一会话的 checkpoint 状态。
 - `run_id` 仅用于运行控制、审计和详情查询，不再作为多轮记忆主键。
+- 用户侧恢复接口 `POST /v1/chat/resume` 与 `POST /v1/chat/resume/stream` 会按 `run_id` 直接恢复原始运行，不要求前端重新传入 agent。
 - `interrupt`：尝试停止当前运行，并保留可恢复的 checkpoint。
 - `resume`：仅允许恢复 `interrupted` 状态的既有运行，不会新建新的 run。
 - `cancel`：彻底取消当前运行，并把状态落为 `cancelled`，后续不再允许恢复。
 - 如果恢复目标缺少可用 checkpoint，接口会直接返回错误，而不是模拟一次恢复成功。
 - 为兼容旧数据，恢复时会优先读取会话级 thread，必要时再回退到旧的 `run_id` thread。
+
+路线规划相关环境变量如下：
+
+- `AMAP_MCP_BASE_URL=https://mcp.amap.com/mcp`
+- `AMAP_MCP_KEY=`
+- `AMAP_MCP_TIMEOUT_SECONDS=30`
 
 为了支撑真实恢复，后端会在启动期初始化 LangGraph checkpoint。默认可通过 `AGENT_CHECKPOINT_ENABLED` 控制开关，并用 `AGENT_CHECKPOINT_URL` 指定独立连接串；留空时会复用 `DATABASE_URL` 并自动转换成 `psycopg` 可用格式。
 `AGENT_CHECKPOINT_CONNECT_TIMEOUT_SECONDS` 用于限制 PostgreSQL checkpoint 初始化等待时间，避免本地数据库不可用时长时间阻塞启动。

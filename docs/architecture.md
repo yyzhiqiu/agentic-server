@@ -28,7 +28,8 @@ project-root/
 - 后端内部 Python 包名固定为 `app`。
 - 后端内部 import 统一使用 `app.xxx`，不要改成 `backend.app.xxx`。
 - `backend/` 下保留 `app/`、`migrations/`、`tests/`、`scripts/`、`run.py`、`alembic.ini` 等后端专属内容。
-- `backend/app/graph/` 当前采用 `Agent Registry + 多个独立 Agent graph` 结构，对外暴露 `chat_agent`、`code_agent` 等能力，而不是 supervisor / handoff 协作模式。
+- `backend/app/graph/` 当前采用 `Agent Registry + 多个独立 Agent graph` 结构，对外暴露 `coordinator_agent`、`chat_agent`、`route_planner_agent`、`code_agent` 等能力，而不是 supervisor / handoff 协作模式。
+- 默认对话入口由 `coordinator_agent` 负责统一路由；高德 MCP 作为 `route_planner_agent` 的工具服务层在启动阶段初始化。
 - Graph、LLM、Redis、HTTP Client、Langfuse 等应用级资源在启动阶段初始化，不在请求期间重复构建。
 
 详细约束见：

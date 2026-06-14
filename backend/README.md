@@ -16,6 +16,8 @@
 - `POST /v1/agents/{agent_id}/chat/stream`
 - `POST /v1/chat`
 - `POST /v1/chat/stream`
+- `POST /v1/chat/resume`
+- `POST /v1/chat/resume/stream`
 - `GET /v1/agent/status`
 - `POST /v1/agent/resume`
 - `POST /v1/agent/interrupt`
@@ -35,8 +37,9 @@
 
 - `conversations`：用户范围内的创建、查询、软删除，删除成功路径会写入 `audit_logs`。
 - `files`：上传元数据登记、列表查询、详情读取、下载与删除；列表接口返回 `{ items, total }` 分页结构，上传成功路径默认会把二进制内容写入本地对象存储、同步登记一条最小 `documents` 记录，并写入 `audit_logs`。删除会同时软删除文件元数据、软删除关联 `documents` 记录，并清理对象存储中的二进制内容。
-- 当前聊天能力采用 `Agent Registry + 多个独立 Graph` 结构，对外暴露 `chat_agent` 和 `code_agent` 两个独立能力，不使用 supervisor，也不使用 handoff。
-- `POST /v1/chat` 与 `POST /v1/chat/stream` 作为兼容入口保留，默认映射到 `chat_agent`。
+- 当前聊天能力采用 `Agent Registry + 多个独立 Graph` 结构，对外暴露 `coordinator_agent`、`chat_agent`、`route_planner_agent` 和 `code_agent`。其中高德 MCP 作为 `route_planner_agent` 的工具层接入，不单独暴露为业务 Agent。
+- `POST /v1/chat` 与 `POST /v1/chat/stream` 作为兼容入口保留，默认映射到 `coordinator_agent`。
+- `POST /v1/chat/resume` 与 `POST /v1/chat/resume/stream` 面向用户侧人机补参恢复，服务端会按 `run_id` 自动解析实际绑定的 Agent 和 thread。
 - `conversations` 与 `agent_runs` 现已将 `agent_id` 持久化为正式字段，`metadata.agent_id` 仅保留为兼容旧数据与旧链路时的兜底来源。
 - `documents`：已经具备一条最小可用的文档处理基础链路。上传文件后会先登记 `documents` 记录，随后可通过 `app.tasks.document_indexing.index_document()` 将文本类文件读取为规范化文本，并把 `documents.metadata.status` 与 `files.metadata.document_status` 更新为 `indexed`。
 - `agent`：轻量 Agent Run 状态写入、恢复、可恢复中断、彻底取消，以及运行记录列表/详情查询；`resume` / `interrupt` / `cancel` 成功路径现在也会写入 `audit_logs`。
@@ -74,7 +77,7 @@ backend/
 - `db/`：Session、Models、Repositories 与事务能力
 - `integrations/`：Redis、HTTP Client、缓存、锁等外部基础设施集成
 - `llms/`：模型工厂与降级策略
-- `graph/`：LangGraph 多 Agent registry、shared 公共能力，以及 `chat_agent` / `code_agent` 独立 graph
+- `graph/`：LangGraph 多 Agent registry、shared 公共能力，以及 `coordinator_agent` / `chat_agent` / `route_planner_agent` / `code_agent` 独立 graph
 - `services/`：业务编排与事务边界
 - `observability/`：Trace、Langfuse、日志上下文与指标预留
 - `audit/`：审计事件、服务与写入器
@@ -113,10 +116,17 @@ uvicorn app.main:app --reload
 - `thread_id` 默认绑定到会话级 `conversation_id`，用于承载同一会话的 checkpoint 状态。
 - `run_id` 仅用于运行控制、审计和详情查询，不再承载多轮记忆。
 - `POST /v1/chat` 与 `POST /v1/chat/stream` 在普通对话场景只提交本轮增量消息，旧消息由 checkpoint 恢复。
+- `POST /v1/chat/resume` 与 `POST /v1/chat/resume/stream` 会把用户补充的结构化输入通过 `Command(resume=...)` 继续送回同一条运行。
 - `POST /v1/agent/interrupt`：尝试停止当前运行，并把状态落为 `interrupted`。如果 checkpoint 可用，后续允许恢复。
 - `POST /v1/agent/resume`：仅允许恢复 `interrupted` 状态的运行，会从最近一次 checkpoint 继续执行，而不是新建一条运行；如果底层不存在可恢复 checkpoint，会直接拒绝恢复。
 - `POST /v1/agent/cancel`：彻底取消当前运行，把状态落为 `cancelled`，后续不再允许恢复。
 - 为兼容历史中断运行，恢复时会优先读取会话级 thread，必要时再回退到旧的 `run_id` thread。
+
+路线规划相关环境变量如下：
+
+- `AMAP_MCP_BASE_URL`：高德 MCP 基础地址，默认值为 `https://mcp.amap.com/mcp`
+- `AMAP_MCP_KEY`：高德 MCP key，仅写入本地 `.env`
+- `AMAP_MCP_TIMEOUT_SECONDS`：高德 MCP 请求超时时间
 
 与运行控制相关的环境变量如下：
 

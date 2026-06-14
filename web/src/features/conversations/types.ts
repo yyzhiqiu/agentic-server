@@ -1,3 +1,5 @@
+import type { PendingHumanInput } from "@/features/chat/types";
+
 export type ConversationMetadata = Record<string, unknown>;
 
 export type ConversationMessage = {
@@ -7,6 +9,22 @@ export type ConversationMessage = {
   content: string;
   metadata: ConversationMetadata;
   createdAt: string | null;
+};
+
+export type ConversationLatestRun = {
+  id: string;
+  agentId: string | null;
+  status:
+    | "running"
+    | "interrupted"
+    | "cancelled"
+    | "completed"
+    | "failed"
+    | "created";
+  interruptSource: string | null;
+  resumeAvailable: boolean;
+  pendingHumanInput: PendingHumanInput | null;
+  updatedAt: string | null;
 };
 
 export type ConversationListItem = {
@@ -25,4 +43,5 @@ export type ConversationListResponse = {
 
 export type ConversationDetail = ConversationListItem & {
   messages: ConversationMessage[];
+  latestRun: ConversationLatestRun | null;
 };

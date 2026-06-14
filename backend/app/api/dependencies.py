@@ -27,6 +27,7 @@ from app.db.repositories.user_repo import UserRepository
 from app.db.session import get_db_session as db_session_dependency
 from app.graph.default import DEFAULT_AGENT_ID
 from app.graph.types import AgentDefinition, AgentRegistry
+from app.integrations.amap_mcp import AmapRouteToolset
 from app.integrations.object_storage import ObjectStorage
 from app.services.agent_runtime_registry import AgentRuntimeRegistry
 from app.services.agent_run_service import AgentRunService
@@ -102,6 +103,12 @@ def get_http_client(request: Request) -> httpx.AsyncClient:
     return request.app.state.http_client
 
 
+def get_amap_route_toolset(request: Request) -> AmapRouteToolset | None:
+    """返回启动阶段初始化的高德 MCP 路线工具集。"""
+
+    return getattr(request.app.state, "amap_route_toolset", None)
+
+
 def get_object_storage(request: Request) -> ObjectStorage:
     """返回 ``app.state`` 中已配置的对象存储后端。"""
 
@@ -136,6 +143,7 @@ async def get_chat_service(
     agent_definition: AgentDefinition = Depends(get_agent_definition),
     user_service: UserService = Depends(get_user_service),
     runtime_registry: AgentRuntimeRegistry = Depends(get_agent_runtime_registry),
+    agent_registry: AgentRegistry = Depends(get_agent_registry),
 ) -> ChatService:
     """为当前请求构建聊天服务。"""
 
@@ -148,6 +156,7 @@ async def get_chat_service(
         user_service=user_service,
         agent_id=agent_definition.metadata.agent_id,
         runtime_registry=runtime_registry,
+        agent_registry=agent_registry,
         tool_call_service=ToolCallService(
             tool_call_repository=ToolCallRepository(session),
         ),
@@ -167,6 +176,7 @@ async def get_conversation_service(
         session=session,
         conversation_repository=ConversationRepository(session),
         message_repository=MessageRepository(session),
+        agent_run_repository=AgentRunRepository(session),
         user_service=user_service,
         audit_service=AuditService(
             writer=DatabaseAuditWriter(session),

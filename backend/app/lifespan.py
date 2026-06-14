@@ -17,6 +17,7 @@ from app.graph.checkpoint import create_checkpointer
 from app.graph.default import DEFAULT_AGENT_ID
 from app.graph.registry import build_agent_registry
 from app.graph.store import create_store
+from app.integrations.amap_mcp import create_amap_route_toolset
 from app.integrations.http_client import close_http_client, create_http_client
 from app.integrations.object_storage import create_object_storage
 from app.integrations.redis import close_redis_client, create_redis_client
@@ -42,6 +43,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.object_storage = create_object_storage()
         app.state.llm = create_llm()
         app.state.langfuse = create_langfuse_client()
+        app.state.amap_route_toolset = await create_amap_route_toolset()
         app.state.agent_runtime_registry = AgentRuntimeRegistry()
         app.state.agent_checkpointer = await create_checkpointer(exit_stack)
         app.state.agent_store = create_store()
@@ -49,6 +51,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             llm=app.state.llm,
             checkpointer=app.state.agent_checkpointer,
             store=app.state.agent_store,
+            amap_route_toolset=app.state.amap_route_toolset,
         )
         app.state.graph = app.state.agent_registry[DEFAULT_AGENT_ID].graph
 

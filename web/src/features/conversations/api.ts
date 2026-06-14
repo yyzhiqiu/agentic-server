@@ -1,8 +1,10 @@
 import { apiRequest } from "@/shared/api/client";
 import { API_ENDPOINTS } from "@/shared/api/endpoints";
+import { mapPendingHumanInput } from "@/features/chat/pendingHumanInput";
 
 import type {
   ConversationDetail,
+  ConversationLatestRun,
   ConversationListResponse,
   ConversationListItem,
   ConversationMessage,
@@ -33,6 +35,17 @@ type BackendConversationListResponse = {
 
 type BackendConversationDetail = BackendConversationRecord & {
   messages: BackendConversationMessage[];
+  latest_run?: BackendConversationLatestRun | null;
+};
+
+type BackendConversationLatestRun = {
+  id: string;
+  agent_id: string | null;
+  status: ConversationLatestRun["status"];
+  interrupt_source: string | null;
+  resume_available: boolean;
+  pending_human_input: unknown;
+  updated_at: string | null;
 };
 
 function readAgentId(record: BackendConversationRecord) {
@@ -71,6 +84,24 @@ function mapConversationMessage(
   };
 }
 
+function mapConversationLatestRun(
+  record: BackendConversationLatestRun | null | undefined,
+): ConversationLatestRun | null {
+  if (!record) {
+    return null;
+  }
+
+  return {
+    id: record.id,
+    agentId: record.agent_id,
+    status: record.status,
+    interruptSource: record.interrupt_source,
+    resumeAvailable: record.resume_available,
+    pendingHumanInput: mapPendingHumanInput(record.pending_human_input),
+    updatedAt: record.updated_at,
+  };
+}
+
 export function getConversations() {
   return apiRequest<BackendConversationListResponse>(
     API_ENDPOINTS.conversations,
@@ -86,5 +117,6 @@ export function getConversationDetail(conversationId: string) {
   ).then<ConversationDetail>((data) => ({
     ...mapConversationListItem(data),
     messages: data.messages.map(mapConversationMessage),
+    latestRun: mapConversationLatestRun(data.latest_run),
   }));
 }

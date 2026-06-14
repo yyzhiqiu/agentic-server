@@ -3,5 +3,4 @@
 from __future__ import annotations
 
 
-DEFAULT_AGENT_ID = "chat_agent"
-
+DEFAULT_AGENT_ID = "coordinator_agent"

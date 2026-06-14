@@ -9,8 +9,14 @@ from __future__ import annotations
 from typing import Any
 
 from app.graph.chat_agent import CHAT_AGENT_METADATA, build_chat_agent
+from app.graph.coordinator_agent import COORDINATOR_AGENT_METADATA, build_coordinator_agent
 from app.graph.code_agent import CODE_AGENT_METADATA, build_code_agent
+from app.graph.route_planner_agent import (
+    ROUTE_PLANNER_AGENT_METADATA,
+    build_route_planner_agent,
+)
 from app.graph.types import AgentDefinition, AgentRegistry
+from app.integrations.amap_mcp import AmapRouteToolset
 
 
 def build_agent_registry(
@@ -18,6 +24,7 @@ def build_agent_registry(
     llm: Any | None = None,
     checkpointer: Any | None = None,
     store: Any | None = None,
+    amap_route_toolset: AmapRouteToolset | None = None,
 ) -> AgentRegistry:
     """构建当前服务可用的 Agent 注册表。
 
@@ -31,6 +38,15 @@ def build_agent_registry(
     """
 
     return {
+        COORDINATOR_AGENT_METADATA.agent_id: AgentDefinition(
+            metadata=COORDINATOR_AGENT_METADATA,
+            graph=build_coordinator_agent(
+                llm=llm,
+                amap_route_toolset=amap_route_toolset,
+                checkpointer=checkpointer,
+                store=store,
+            ),
+        ),
         CHAT_AGENT_METADATA.agent_id: AgentDefinition(
             metadata=CHAT_AGENT_METADATA,
             graph=build_chat_agent(
@@ -47,5 +63,12 @@ def build_agent_registry(
                 store=store,
             ),
         ),
+        ROUTE_PLANNER_AGENT_METADATA.agent_id: AgentDefinition(
+            metadata=ROUTE_PLANNER_AGENT_METADATA,
+            graph=build_route_planner_agent(
+                amap_route_toolset=amap_route_toolset,
+                checkpointer=checkpointer,
+                store=store,
+            ),
+        ),
     }
-

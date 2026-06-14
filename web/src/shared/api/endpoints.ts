@@ -1,6 +1,8 @@
 export const API_ENDPOINTS = {
   chat: "/v1/chat",
   chatStream: "/v1/chat/stream",
+  chatResume: "/v1/chat/resume",
+  chatResumeStream: "/v1/chat/resume/stream",
   agents: "/v1/agents",
   agentDetail: (agentId: string) => `/v1/agents/${agentId}`,
   agentChat: (agentId: string) => `/v1/agents/${agentId}/chat`,

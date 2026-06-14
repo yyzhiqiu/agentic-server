@@ -5,12 +5,12 @@ import { Sidebar } from "@/shared/components/layout/Sidebar";
 
 export function AppLayout() {
   return (
-    <div className="min-h-screen text-slate-900">
-      <div className="mx-auto flex min-h-screen max-w-7xl gap-6 px-4 py-4 lg:px-6">
+    <div className="h-screen w-screen overflow-hidden text-slate-800 dark:text-slate-100 antialiased transition-colors duration-300 bg-[#f0f4f9] dark:bg-[#131314]">
+      <div className="flex h-full w-full gap-5 p-5 animate-fade-in overflow-hidden">
         <Sidebar />
-        <div className="flex min-h-full flex-1 flex-col gap-4">
+        <div className="flex h-full flex-1 flex-col gap-4 overflow-hidden">
           <Header />
-          <main className="flex-1">
+          <main className="flex-1 min-h-0">
             <Outlet />
           </main>
         </div>

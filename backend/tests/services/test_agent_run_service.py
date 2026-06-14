@@ -190,6 +190,68 @@ async def test_agent_run_service_resumes_existing_interrupted_run(monkeypatch) -
 
 
 @pytest.mark.asyncio
+async def test_agent_run_service_resume_prefers_graph_agent_id_for_background_graph(
+    monkeypatch,
+) -> None:
+    repository = _FakeAgentRunRepository()
+    repository.items["run-1"] = _FakeAgentRun(
+        id="run-1",
+        agent_id="route_planner_agent",
+        user_id="user-1",
+        status="interrupted",
+        input={"messages": [{"role": "user", "content": "我要去广东"}]},
+        output={},
+        metadata_={
+            "trace_id": "trace-1",
+            "reason": "等待补参",
+            "graph_agent_id": "coordinator_agent",
+        },
+    )
+    audit_writer = _FakeAuditWriter()
+    runtime_registry = AgentRuntimeRegistry()
+    service = AgentRunService(
+        session=_FakeSession(),  # type: ignore[arg-type]
+        agent_run_repository=repository,  # type: ignore[arg-type]
+        agent_registry={
+            "coordinator_agent": SimpleNamespace(
+                graph=object(),
+                metadata=SimpleNamespace(agent_id="coordinator_agent"),
+            ),
+            "route_planner_agent": SimpleNamespace(
+                graph=object(),
+                metadata=SimpleNamespace(agent_id="route_planner_agent"),
+            ),
+        },  # type: ignore[arg-type]
+        runtime_registry=runtime_registry,
+        audit_service=AuditService(writer=audit_writer),
+    )
+
+    scheduled: dict[str, str] = {}
+
+    async def _fake_schedule(*, run_id: str, user_id: str, agent_id: str) -> None:
+        scheduled.update({"run_id": run_id, "user_id": user_id, "agent_id": agent_id})
+
+    monkeypatch.setattr(service, "_schedule_resume", _fake_schedule)
+
+    created = await service.resume(
+        "run-1",
+        {"origin": "深圳南山科技园"},
+        "user-1",
+        agent_id="route_planner_agent",
+    )
+
+    assert created.status == "running"
+    assert created.agent_id == "route_planner_agent"
+    assert repository.items["run-1"].metadata_["graph_agent_id"] == "coordinator_agent"
+    assert repository.items["run-1"].metadata_["resume_payload"] == {"origin": "深圳南山科技园"}
+    assert scheduled == {
+        "run_id": "run-1",
+        "user_id": "user-1",
+        "agent_id": "coordinator_agent",
+    }
+
+
+@pytest.mark.asyncio
 async def test_agent_run_service_interrupts_existing_run_without_active_task() -> None:
     repository = _FakeAgentRunRepository()
     repository.items["run-1"] = _FakeAgentRun(

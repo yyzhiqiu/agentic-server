@@ -12,6 +12,39 @@ from app.schemas.tool_call import ToolCallPayload
 Role = Literal["system", "user", "assistant", "tool"]
 
 
+class HumanInputOption(BaseModel):
+    """结构化人机交互字段中的单个候选项。"""
+
+    label: str = Field(min_length=1)
+    value: str = Field(min_length=1)
+
+
+class HumanInputField(BaseModel):
+    """描述前端可渲染的单个补参字段。"""
+
+    name: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    type: Literal["text", "select"] = "text"
+    required: bool = True
+    placeholder: str | None = None
+    value: str | None = None
+    allow_custom: bool = False
+    custom_option_label: str | None = None
+    custom_placeholder: str | None = None
+    options: list[HumanInputOption] = Field(default_factory=list)
+
+
+class PendingHumanInput(BaseModel):
+    """描述当前运行暂停时需要用户补充的结构化输入。"""
+
+    kind: Literal["form"] = "form"
+    title: str = Field(min_length=1)
+    message: str = Field(min_length=1)
+    fields: list[HumanInputField] = Field(default_factory=list)
+    submit_label: str = Field(min_length=1)
+    missing_fields: list[str] = Field(default_factory=list)
+
+
 class ChatMessage(BaseModel):
     """单条聊天消息。"""
 
@@ -39,11 +72,19 @@ class ChatResponse(BaseModel):
     messages: list[ChatMessage] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     tool_calls: list[ToolCallPayload] = Field(default_factory=list)
+    pending_human_input: PendingHumanInput | None = None
+
+
+class ChatResumeRequest(BaseModel):
+    """面向用户侧的人机补参恢复请求。"""
+
+    run_id: str = Field(min_length=1)
+    input: dict[str, Any] = Field(default_factory=dict)
 
 
 class ChatStreamEvent(BaseModel):
     """流式聊天事件。"""
 
-    type: Literal["start", "message", "error", "done"] = "message"
+    type: Literal["start", "message", "interrupt", "error", "done"] = "message"
     content: str | None = None
     data: dict[str, Any] = Field(default_factory=dict)

@@ -31,7 +31,15 @@ async function invalidateAgentRunQueries(
 export function useAgentRuns() {
   return useQuery({
     queryKey: QUERY_KEYS.agentRuns,
-    queryFn: getAgentRuns,
+    queryFn: () => getAgentRuns(),
+  });
+}
+
+export function useConversationAgentRuns(conversationId: string) {
+  return useQuery({
+    queryKey: [...QUERY_KEYS.agentRuns, "conversation", conversationId],
+    queryFn: () => getAgentRuns(conversationId),
+    enabled: Boolean(conversationId),
   });
 }
 

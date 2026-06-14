@@ -2,10 +2,10 @@ import { ApiError } from "@/shared/api/errors";
 import { createId } from "@/shared/lib/id";
 import type { ApiResponse } from "@/shared/types/api";
 
-const DEFAULT_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
-
 export function buildApiUrl(path: string) {
-  return `${DEFAULT_BASE_URL}${path}`;
+  const customBaseUrl = localStorage.getItem("api_base_url");
+  const baseUrl = customBaseUrl !== null ? customBaseUrl : (import.meta.env.VITE_API_BASE_URL ?? "");
+  return `${baseUrl}${path}`;
 }
 
 function isApiResponse<T>(value: unknown): value is ApiResponse<T> {

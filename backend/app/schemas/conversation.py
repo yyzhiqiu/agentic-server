@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.schemas.chat import PendingHumanInput
 from app.schemas.message import MessageRead
 
 
@@ -29,10 +31,25 @@ class ConversationRead(BaseModel):
     created_at: datetime | None = None
 
 
+class ConversationLatestRun(BaseModel):
+    """描述当前会话最近一次运行的权威状态快照。"""
+
+    id: str
+    agent_id: str | None = None
+    status: Literal["running", "interrupted", "cancelled", "completed", "failed", "created"] = (
+        "created"
+    )
+    interrupt_source: str | None = None
+    resume_available: bool = False
+    pending_human_input: PendingHumanInput | None = None
+    updated_at: datetime | None = None
+
+
 class ConversationDetail(ConversationRead):
-    """包含已持久化消息的会话详情负载。"""
+    """包含已持久化消息与当前运行状态的会话详情负载。"""
 
     messages: list[MessageRead] = Field(default_factory=list)
+    latest_run: ConversationLatestRun | None = None
 
 
 class ConversationList(BaseModel):

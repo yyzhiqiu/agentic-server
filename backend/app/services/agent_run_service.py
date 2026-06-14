@@ -87,6 +87,20 @@ class AgentRunService:
         return None
 
     @staticmethod
+    def _graph_agent_id(agent_run: AgentRun) -> str:
+        """返回该运行记录实际绑定的图入口 Agent 标识。"""
+
+        metadata = dict(agent_run.metadata_ or {})
+        graph_agent_id = metadata.get("graph_agent_id")
+        if isinstance(graph_agent_id, str) and graph_agent_id:
+            return graph_agent_id
+
+        agent_id = AgentRunService._agent_id(agent_run)
+        if isinstance(agent_id, str) and agent_id:
+            return agent_id
+        return DEFAULT_AGENT_ID
+
+    @staticmethod
     def _resolve_agent_id(
         *,
         requested_agent_id: str | None = None,
@@ -140,6 +154,16 @@ class AgentRunService:
             error_message=AgentRunService._error_message(agent_run.status, output),
             error_code=AgentRunService._error_code(agent_run.status, output),
             interruption_reason=AgentRunService._interruption_reason(agent_run.status, metadata),
+            pending_human_input=(
+                dict(metadata["pending_human_input"])
+                if isinstance(metadata.get("pending_human_input"), dict)
+                else None
+            ),
+            interrupt_source=(
+                metadata.get("interrupt_source")
+                if isinstance(metadata.get("interrupt_source"), str)
+                else None
+            ),
         )
 
     @classmethod
@@ -316,6 +340,7 @@ class AgentRunService:
         async with transaction(session):
             metadata = dict(agent_run.metadata_ or {})
             metadata["agent_id"] = agent_id
+            metadata.setdefault("graph_agent_id", agent_id)
             metadata["resume_available"] = status == "interrupted"
             if reason is None:
                 metadata.pop("reason", None)
@@ -354,6 +379,7 @@ class AgentRunService:
         async with transaction(session):
             metadata = dict(agent_run.metadata_ or {})
             metadata["agent_id"] = agent_id
+            metadata.setdefault("graph_agent_id", agent_id)
             metadata["resume_available"] = False
             metadata.pop("reason", None)
 
@@ -629,11 +655,13 @@ class AgentRunService:
             payload=payload,
             existing_run=agent_run,
         )
-        self._get_agent_graph_runner(resolved_agent_id)
+        resume_graph_agent_id = self._graph_agent_id(agent_run)
+        self._get_agent_graph_runner(resume_graph_agent_id)
 
         async with transaction(self.session):
             metadata = dict(agent_run.metadata_ or {})
             metadata["agent_id"] = resolved_agent_id
+            metadata["graph_agent_id"] = resume_graph_agent_id
             metadata["resume_available"] = False
             metadata.pop("reason", None)
             if payload:
@@ -650,7 +678,7 @@ class AgentRunService:
         await self._schedule_resume(
             run_id=run_id,
             user_id=user_id,
-            agent_id=resolved_agent_id,
+            agent_id=resume_graph_agent_id,
         )
 
         await self._record_audit(

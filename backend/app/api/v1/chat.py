@@ -12,7 +12,7 @@ from starlette.responses import StreamingResponse
 from app.api.dependencies import get_chat_service, get_current_user
 from app.common.responses import success_response
 from app.core.security import CurrentUser
-from app.schemas.chat import ChatRequest
+from app.schemas.chat import ChatRequest, ChatResumeRequest
 from app.services.chat_service import ChatService
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -26,7 +26,7 @@ async def chat(
 ) -> dict:
     """为当前用户执行一次非流式聊天请求。
 
-    该接口作为兼容入口保留，默认调用 ``chat_agent``。
+    该接口作为兼容入口保留，默认调用 ``coordinator_agent``。
     """
 
     response = await service.chat(payload, user)
@@ -41,10 +41,38 @@ async def chat_stream(
 ) -> StreamingResponse:
     """通过 SSE 为当前用户持续返回聊天事件。
 
-    该接口作为兼容入口保留，默认调用 ``chat_agent``。
+    该接口作为兼容入口保留，默认调用 ``coordinator_agent``。
     """
 
     return StreamingResponse(
         service.stream_chat(payload, user),
+        media_type="text/event-stream",
+    )
+
+
+@router.post("/resume")
+async def resume_chat(
+    payload: ChatResumeRequest,
+    service: ChatService = Depends(get_chat_service),
+    user: CurrentUser = Depends(get_current_user),
+) -> dict:
+    """恢复一条等待用户补参的聊天运行。"""
+
+    response = await service.resume_chat(payload.run_id, user, payload.input)
+    if response is None:
+        return success_response({})
+    return success_response(response.model_dump())
+
+
+@router.post("/resume/stream")
+async def resume_chat_stream(
+    payload: ChatResumeRequest,
+    service: ChatService = Depends(get_chat_service),
+    user: CurrentUser = Depends(get_current_user),
+) -> StreamingResponse:
+    """通过 SSE 恢复一条等待用户补参的聊天运行。"""
+
+    return StreamingResponse(
+        service.stream_resume_chat(payload.run_id, user, payload.input),
         media_type="text/event-stream",
     )

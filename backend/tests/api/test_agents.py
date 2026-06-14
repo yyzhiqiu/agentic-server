@@ -6,10 +6,12 @@ import json
 import pytest
 
 from app.api.dependencies import get_agent_service, get_chat_service
+from app.graph.coordinator_agent.metadata import COORDINATOR_AGENT_METADATA
 from app.core.security import CurrentUser
 from app.graph.chat_agent.metadata import CHAT_AGENT_METADATA
 from app.graph.code_agent.metadata import CODE_AGENT_METADATA
 from app.graph.default import DEFAULT_AGENT_ID
+from app.graph.route_planner_agent.metadata import ROUTE_PLANNER_AGENT_METADATA
 from app.graph.types import AgentDefinition
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
 from app.services.agent_service import AgentService
@@ -75,12 +77,20 @@ class InMemoryAgentChatService:
 @pytest.fixture
 def agent_services(client) -> Generator[None, None, None]:
     registry = {
+        COORDINATOR_AGENT_METADATA.agent_id: AgentDefinition(
+            metadata=COORDINATOR_AGENT_METADATA,
+            graph=object(),
+        ),
         CHAT_AGENT_METADATA.agent_id: AgentDefinition(
             metadata=CHAT_AGENT_METADATA,
             graph=object(),
         ),
         CODE_AGENT_METADATA.agent_id: AgentDefinition(
             metadata=CODE_AGENT_METADATA,
+            graph=object(),
+        ),
+        ROUTE_PLANNER_AGENT_METADATA.agent_id: AgentDefinition(
+            metadata=ROUTE_PLANNER_AGENT_METADATA,
             graph=object(),
         ),
     }
@@ -104,7 +114,12 @@ def test_list_agents_returns_registered_metadata(client, agent_services) -> None
     assert response.status_code == 200
     payload = response.json()
     assert payload["success"] is True
-    assert [item["agent_id"] for item in payload["data"]] == ["chat_agent", "code_agent"]
+    assert [item["agent_id"] for item in payload["data"]] == [
+        "coordinator_agent",
+        "chat_agent",
+        "code_agent",
+        "route_planner_agent",
+    ]
 
 
 def test_get_agent_returns_single_metadata(client, agent_services) -> None:
@@ -130,7 +145,7 @@ def test_get_agent_returns_unified_not_found_error(client, agent_services) -> No
     assert payload["data"]["agent_id"] == "missing_agent"
 
 
-def test_default_chat_route_uses_chat_agent(client, agent_services) -> None:
+def test_default_chat_route_uses_coordinator_agent(client, agent_services) -> None:
     response = client.post(
         "/v1/chat",
         json={"messages": [{"role": "user", "content": "hello"}]},
@@ -138,8 +153,8 @@ def test_default_chat_route_uses_chat_agent(client, agent_services) -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["data"]["metadata"]["agent_id"] == "chat_agent"
-    assert payload["data"]["message"]["content"].startswith("chat_agent mock response")
+    assert payload["data"]["metadata"]["agent_id"] == "coordinator_agent"
+    assert payload["data"]["message"]["content"].startswith("coordinator_agent mock response")
 
 
 def test_agent_chat_route_uses_selected_agent(client, agent_services) -> None:
@@ -169,4 +184,3 @@ def test_agent_stream_route_uses_selected_agent(client, agent_services) -> None:
     done_chunk = next(chunk for chunk in response.text.split("\n\n") if "event: done" in chunk)
     payload = json.loads(done_chunk.split("data: ", 1)[1])
     assert payload["data"]["metadata"]["agent_id"] == "code_agent"
-

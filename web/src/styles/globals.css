@@ -3,17 +3,28 @@
 @tailwind utilities;
 
 :root {
-  color: #142013;
+  color: #1f1f1f;
   background:
-    radial-gradient(circle at top left, rgba(235, 240, 213, 0.8), transparent 28%),
-    linear-gradient(180deg, #f7f9f0 0%, #eef2dd 100%);
-  font-family: "Segoe UI", "PingFang SC", sans-serif;
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.8), transparent 45%),
+    linear-gradient(180deg, #f0f4f9 0%, #e3e9f4 100%);
+  font-family: "Plus Jakarta Sans", "Inter", "Segoe UI", "PingFang SC", sans-serif;
 }
 
-body {
+/* 暗黑模式全局底色与文字色 */
+.dark {
+  color: #e3e3e3;
+  background:
+    radial-gradient(circle at top left, rgba(30, 30, 31, 0.4), transparent 40%),
+    linear-gradient(180deg, #131314 0%, #1e1e1f 100%);
+  color-scheme: dark;
+}
+
+html, body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  /* 平滑主题切换过渡 */
+  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
 }
 
 #root {
@@ -27,4 +38,31 @@ a {
 
 * {
   box-sizing: border-box;
+}
+
+/* 自定义现代隐藏式滚动条 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(113, 113, 122, 0.25);
+  border-radius: 99px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(113, 113, 122, 0.4);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(113, 113, 122, 0.45);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(113, 113, 122, 0.6);
 }

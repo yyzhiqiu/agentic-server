@@ -10,15 +10,19 @@ from app.audit.service import AuditService
 from app.common.context import get_trace_id
 from app.common.error_codes import ErrorCode
 from app.common.exceptions import AppException
+from app.db.models.agent_run import AgentRun
 from app.db.models.conversation import Conversation
 from app.db.models.message import Message
+from app.db.repositories.agent_run_repo import AgentRunRepository
 from app.db.repositories.conversation_repo import ConversationRepository
 from app.db.repositories.message_repo import MessageRepository
 from app.db.transaction import transaction
 from app.graph.default import DEFAULT_AGENT_ID
+from app.graph.shared.human_input import normalize_pending_human_input
 from app.schemas.conversation import (
     ConversationCreate,
     ConversationDetail,
+    ConversationLatestRun,
     ConversationList,
     ConversationRead,
 )
@@ -35,12 +39,14 @@ class ConversationService:
         session: AsyncSession,
         conversation_repository: ConversationRepository,
         message_repository: MessageRepository | None = None,
+        agent_run_repository: AgentRunRepository | None = None,
         user_service: UserService | None = None,
         audit_service: AuditService | None = None,
     ) -> None:
         self.session = session
         self.conversation_repository = conversation_repository
         self.message_repository = message_repository
+        self.agent_run_repository = agent_run_repository
         self.user_service = user_service
         self.audit_service = audit_service or AuditService()
 
@@ -83,6 +89,40 @@ class ConversationService:
             metadata=metadata,
             created_at=message.created_at,
         )
+
+    @staticmethod
+    def _latest_run_to_read(agent_run: AgentRun | None) -> ConversationLatestRun | None:
+        """将最近一次运行记录映射为聊天页可直接消费的权威状态。"""
+
+        if agent_run is None:
+            return None
+
+        metadata = dict(agent_run.metadata_ or {})
+        pending_payload = normalize_pending_human_input(metadata.get("pending_human_input"))
+        resume_available = metadata.get("resume_available") is True
+        interrupt_source = metadata.get("interrupt_source")
+        return ConversationLatestRun(
+            id=agent_run.id,
+            agent_id=ConversationService._agent_id_from_run(agent_run),
+            status=agent_run.status,
+            interrupt_source=interrupt_source if isinstance(interrupt_source, str) else None,
+            resume_available=resume_available,
+            pending_human_input=pending_payload,
+            updated_at=agent_run.updated_at,
+        )
+
+    @staticmethod
+    def _agent_id_from_run(agent_run: AgentRun) -> str | None:
+        """从运行记录的一等字段与兼容元数据中提取实际 Agent 标识。"""
+
+        if isinstance(agent_run.agent_id, str) and agent_run.agent_id:
+            return agent_run.agent_id
+
+        metadata = dict(agent_run.metadata_ or {})
+        agent_id = metadata.get("agent_id")
+        if isinstance(agent_id, str) and agent_id:
+            return agent_id
+        return None
 
     async def create(self, payload: ConversationCreate, user_id: str) -> ConversationRead:
         """为当前用户创建会话。"""
@@ -146,9 +186,17 @@ class ConversationService:
             )
             messages = [self._message_to_read(item) for item in items]
 
+        latest_run = None
+        if self.agent_run_repository is not None:
+            latest_run = await self.agent_run_repository.get_latest_by_conversation_for_user(
+                conversation.id,
+                user_id,
+            )
+
         return ConversationDetail(
             **self._to_read(conversation).model_dump(),
             messages=messages,
+            latest_run=self._latest_run_to_read(latest_run),
         )
 
     async def delete(self, conversation_id: str, user_id: str) -> dict[str, str]:
