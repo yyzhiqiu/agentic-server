@@ -10,6 +10,7 @@
 
 ```text
 deploy/
+├── deploy.sh
 ├── docker/
 │   ├── backend.Dockerfile
 │   └── web.Dockerfile
@@ -17,7 +18,8 @@ deploy/
 │   ├── docker-compose.yml
 │   └── docker-compose.dev.yml
 └── nginx/
-    └── nginx.conf
+    ├── nginx.conf
+    └── macmini.conf
 ```
 
 ## 当前实现
@@ -28,7 +30,72 @@ deploy/
 - `deploy/compose/docker-compose.dev.yml` 提供开发联调版本，保留代码挂载、后端 `uvicorn --reload` 和前端 `pnpm dev`。
 - 生产版 `web` 镜像现在内置了 SPA 路由回退，直接刷新 `/chat`、`/conversations/:id` 等地址时仍会回到前端入口页。
 - `deploy/nginx/nginx.conf` 现在把 `/v1/`、`/health`、`/ready` 转发到 `backend`，把 `/` 转发到 `web`，并对 `/v1/chat/stream` 关闭代理缓冲以支持流式响应。
+- `deploy/deploy.sh` 提供 Mac mini 本机发布流程，负责前端构建、后端依赖安装、数据库迁移、进程重启和健康检查。
+- `deploy/nginx/macmini.conf` 用于 Homebrew Nginx，本机入口默认为 `3001`，后端默认为 `127.0.0.1:8001`。
 - Compose 服务现在补上了基础健康检查和更稳的依赖顺序，便于作为复用模板继续演进。
+
+## Mac mini 本机发布
+
+Mac mini 发布方式采用轻量本机部署：Nginx 直接托管 `web/dist`，后端使用项目虚拟环境和 `nohup uvicorn` 运行。
+
+首次发布前准备后端生产配置：
+
+```bash
+cp backend/.env.example backend/.env
+```
+
+需要至少检查数据库连接、身份哈希盐、LLM、MCP 和可观测性相关配置，不要把真实密钥提交到版本库。
+
+执行发布：
+
+```bash
+pnpm deploy:macmini
+```
+
+也可以直接使用脚本的进程管理命令：
+
+```bash
+bash deploy/deploy.sh deploy
+bash deploy/deploy.sh start
+bash deploy/deploy.sh stop
+bash deploy/deploy.sh restart
+bash deploy/deploy.sh status
+```
+
+脚本默认使用以下本机端口，避免与 `credit-bookkeeping` 的 `8000` 和 `3000` 冲突：
+
+- FastAPI：`127.0.0.1:8001`
+- Nginx：`0.0.0.0:3001`
+
+后端默认只启动一个 worker。当前 Agent 运行控制注册表保存在进程内，使用多个 worker 可能导致中断、取消或状态查询请求命中不同进程。确认运行状态已经改为共享存储前，不建议覆盖 `BACKEND_WORKERS`。
+
+如需调整脚本参数，可以在命令前注入环境变量：
+
+```bash
+BACKEND_PORT=8011 VENV_DIR="$PWD/backend/venv" bash deploy/deploy.sh
+```
+
+修改后端端口时，需要同步修改 `deploy/nginx/macmini.conf` 中的 `proxy_pass`。
+
+### 安装 Nginx 配置
+
+Apple Silicon Mac 使用 Homebrew 安装 Nginx 时，主配置通常会包含 `/opt/homebrew/etc/nginx/servers/*`。可以创建软链接：
+
+```bash
+ln -sfn \
+  /Users/baixuezhen/Desktop/workspace/agentic-server/deploy/nginx/macmini.conf \
+  /opt/homebrew/etc/nginx/servers/agentic-server.conf
+nginx -t
+brew services restart nginx
+```
+
+发布完成后访问：
+
+```text
+http://<Mac-mini-IP>:3001
+```
+
+如果仓库部署路径发生变化，需要同步修改 `macmini.conf` 的 `root`。如果使用 Intel Mac，还需要把 Nginx 配置和日志路径中的 `/opt/homebrew` 改为 `/usr/local`。
 
 ## 结构契约
 
