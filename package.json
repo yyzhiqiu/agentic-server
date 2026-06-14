@@ -14,6 +14,7 @@
     "dev:backend": "cd backend && python run.py",
     "test:backend": "cd backend && python -m pytest",
     "check:env": "python scripts/check_env.py",
+    "deploy:macmini": "bash deploy/deploy.sh",
     "compose:up": "cd deploy/compose && docker compose up --build",
     "compose:dev": "cd deploy/compose && docker compose -f docker-compose.dev.yml up --build",
     "compose:down": "cd deploy/compose && docker compose down"
