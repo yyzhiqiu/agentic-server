@@ -16,6 +16,8 @@ export type RenderMessage = {
   role: string;
   content: string;
   pending?: boolean;
+  metadata?: Record<string, unknown>;
+  name?: string | null;
 };
 
 function normalizeRole(role: string): ApiChatMessage["role"] {
@@ -112,6 +114,8 @@ export function toRenderMessages(messages: TimelineMessage[]): RenderMessage[] {
     role: message.role,
     content: message.content,
     pending: message.pending,
+    metadata: message.metadata,
+    name: message.name,
   }));
 }
 

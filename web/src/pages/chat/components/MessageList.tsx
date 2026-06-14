@@ -5,6 +5,8 @@ type Message = {
   role: string;
   content: string;
   pending?: boolean;
+  metadata?: Record<string, unknown>;
+  name?: string | null;
 };
 
 type MessageListProps = {
@@ -20,6 +22,8 @@ export function MessageList({ messages }: MessageListProps) {
           content={message.content}
           role={message.role}
           pending={message.pending}
+          metadata={message.metadata}
+          name={message.name}
         />
       ))}
     </div>

@@ -25,6 +25,8 @@ export function ConversationDetailPage() {
     id: message.id,
     role: message.role,
     content: message.content,
+    metadata: message.metadata,
+    name: (message.metadata?.name as string | undefined) || null,
   }));
 
   return (
