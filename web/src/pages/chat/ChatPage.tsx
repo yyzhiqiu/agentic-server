@@ -27,14 +27,18 @@ import { MessageList } from "@/pages/chat/components/MessageList";
 import { AgentSelector } from "@/pages/chat/components/AgentSelector";
 import {
   applyResumeMessageToResponse,
+  buildResponseExecutionActivities,
   buildResumeMessage,
-  conversationMessagesToTimeline,
+  buildRunningExecutionActivities,
   createLocalTimelineMessage,
+  failStreamingAssistantMessage,
+  mergeConversationHistoryWithTimeline,
   mergeTimelineWithResponse,
-  removeStreamingAssistantMessage,
   type TimelineMessage,
   toRenderMessages,
   upsertStreamingAssistantMessage,
+  upsertStreamingNodeActivity,
+  upsertStreamingToolActivity,
 } from "@/pages/chat/chatTimeline";
 import { ErrorState } from "@/shared/components/feedback/ErrorState";
 import { Badge } from "@/shared/components/ui/badge";
@@ -90,6 +94,7 @@ function buildConversationSnapshotKey(conversation: ConversationDetail) {
       id: message.id,
       role: message.role,
       content: message.content,
+      metadata: message.metadata,
       createdAt: message.createdAt,
     })),
     latestRun: conversation.latestRun
@@ -103,6 +108,7 @@ function buildConversationSnapshotKey(conversation: ConversationDetail) {
           pendingHumanInput: conversation.latestRun.pendingHumanInput,
         }
       : null,
+    runTraces: conversation.runTraces,
   });
 }
 
@@ -179,7 +185,13 @@ export function ChatPage() {
     appliedConversationSnapshotKeyRef.current = snapshotKey;
     setConversationId(conversation.id);
     setHydratedConversationId(conversation.id);
-    setMessages(conversationMessagesToTimeline(conversation.messages));
+    setMessages((currentMessages) =>
+      mergeConversationHistoryWithTimeline(
+        conversation.messages,
+        currentMessages,
+        conversation.runTraces,
+      ),
+    );
     setCurrentRunId(latestRun?.id ?? null);
     setErrorMessage(null);
     setPendingHumanInput(getPendingHumanInputFromRun(latestRun));
@@ -255,6 +267,7 @@ export function ChatPage() {
       mergeTimelineWithResponse(
         currentMessages.length > 0 ? currentMessages : fallbackMessages,
         response.messages,
+        buildResponseExecutionActivities(response, activeAgentId),
       ),
     );
     if (nextConversationId) {
@@ -343,6 +356,7 @@ export function ChatPage() {
     );
     const fallbackMessages = [...messages, latestUserTimelineMessage];
     const streamMessageId = createId("assistant-stream");
+    const streamedMessageIds = new Map<string, string>();
     streamMessageIdRef.current = streamMessageId;
 
     setErrorMessage(null);
@@ -376,13 +390,47 @@ export function ChatPage() {
             if (meta.agentId) {
               setRoutedAgentId(meta.agentId);
             }
-          },
-          onMessage: (contentChunk) => {
             setMessages((currentMessages) =>
               upsertStreamingAssistantMessage(
                 currentMessages,
                 streamMessageId,
-                contentChunk || "等待流式响应中...",
+                "等待流式响应中...",
+                buildRunningExecutionActivities(meta, activeAgentId),
+              ),
+            );
+          },
+          onMessage: (message) => {
+            let timelineMessageId = streamedMessageIds.get(message.messageId);
+            if (!timelineMessageId) {
+              timelineMessageId =
+                streamedMessageIds.size === 0
+                  ? streamMessageId
+                  : `${streamMessageId}-${message.messageId}`;
+              streamedMessageIds.set(message.messageId, timelineMessageId);
+            }
+            setMessages((currentMessages) =>
+              upsertStreamingAssistantMessage(
+                currentMessages,
+                timelineMessageId,
+                message.content || "等待流式响应中...",
+              ),
+            );
+          },
+          onNode: (event) => {
+            setMessages((currentMessages) =>
+              upsertStreamingNodeActivity(
+                currentMessages,
+                streamMessageId,
+                event,
+              ),
+            );
+          },
+          onTool: (event) => {
+            setMessages((currentMessages) =>
+              upsertStreamingToolActivity(
+                currentMessages,
+                streamMessageId,
+                event,
               ),
             );
           },
@@ -411,7 +459,7 @@ export function ChatPage() {
           onError: (error) => {
             setErrorMessage(error.message);
             setMessages((currentMessages) =>
-              removeStreamingAssistantMessage(currentMessages, streamMessageId),
+              failStreamingAssistantMessage(currentMessages, streamMessageId),
             );
           },
         },
@@ -421,7 +469,7 @@ export function ChatPage() {
         error instanceof Error ? error.message : "流式聊天请求失败",
       );
       setMessages((currentMessages) =>
-        removeStreamingAssistantMessage(currentMessages, streamMessageId),
+        failStreamingAssistantMessage(currentMessages, streamMessageId),
       );
     } finally {
       setRequestInFlight(false);
@@ -487,6 +535,7 @@ export function ChatPage() {
       ? [...messages, resumeTimelineMessage]
       : messages;
     const streamMessageId = createId("assistant-stream");
+    const streamedMessageIds = new Map<string, string>();
     streamMessageIdRef.current = streamMessageId;
 
     setErrorMessage(null);
@@ -504,13 +553,47 @@ export function ChatPage() {
             if (meta.runId) {
               setCurrentRunId(meta.runId);
             }
-          },
-          onMessage: (contentChunk) => {
             setMessages((currentMessages) =>
               upsertStreamingAssistantMessage(
                 currentMessages,
                 streamMessageId,
-                contentChunk || "等待流式响应中...",
+                "等待流式响应中...",
+                buildRunningExecutionActivities(meta, activeAgentId),
+              ),
+            );
+          },
+          onMessage: (message) => {
+            let timelineMessageId = streamedMessageIds.get(message.messageId);
+            if (!timelineMessageId) {
+              timelineMessageId =
+                streamedMessageIds.size === 0
+                  ? streamMessageId
+                  : `${streamMessageId}-${message.messageId}`;
+              streamedMessageIds.set(message.messageId, timelineMessageId);
+            }
+            setMessages((currentMessages) =>
+              upsertStreamingAssistantMessage(
+                currentMessages,
+                timelineMessageId,
+                message.content || "等待流式响应中...",
+              ),
+            );
+          },
+          onNode: (event) => {
+            setMessages((currentMessages) =>
+              upsertStreamingNodeActivity(
+                currentMessages,
+                streamMessageId,
+                event,
+              ),
+            );
+          },
+          onTool: (event) => {
+            setMessages((currentMessages) =>
+              upsertStreamingToolActivity(
+                currentMessages,
+                streamMessageId,
+                event,
               ),
             );
           },
@@ -542,7 +625,7 @@ export function ChatPage() {
           onError: (error) => {
             setErrorMessage(error.message);
             setMessages((currentMessages) =>
-              removeStreamingAssistantMessage(currentMessages, streamMessageId),
+              failStreamingAssistantMessage(currentMessages, streamMessageId),
             );
           },
         },
@@ -550,7 +633,7 @@ export function ChatPage() {
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "恢复聊天失败");
       setMessages((currentMessages) =>
-        removeStreamingAssistantMessage(currentMessages, streamMessageId),
+        failStreamingAssistantMessage(currentMessages, streamMessageId),
       );
     } finally {
       setRequestInFlight(false);

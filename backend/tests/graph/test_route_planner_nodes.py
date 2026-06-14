@@ -5,12 +5,103 @@ from langchain_core.messages import HumanMessage
 
 from app.graph.route_planner_agent.nodes import (
     _summarize_route_result,
+    create_execute_route_plan_node,
     create_parse_route_request_node,
     create_prepare_human_interaction_node,
     create_resume_merge_node,
     create_validate_route_slots_node,
 )
 from app.graph.shared.nodes.human_interaction import create_human_interaction_node
+from app.integrations.amap_mcp import AmapRouteResult, ResolvedLocation
+
+
+class _FakeAmapRouteToolset:
+    """提供路线节点测试所需的最小高德工具替身。"""
+
+    async def resolve_place(
+        self,
+        text: str,
+        *,
+        city: str | None = None,
+    ) -> ResolvedLocation | None:
+        """把测试地点稳定映射为坐标，不访问外部服务。"""
+
+        _ = city
+        locations = {
+            "南京": ResolvedLocation(
+                name="南京",
+                location="118.796624,32.059344",
+                city="南京市",
+            ),
+            "上海": ResolvedLocation(
+                name="上海",
+                location="121.473667,31.230525",
+                city="上海市",
+            ),
+        }
+        return locations.get(text)
+
+    async def plan_route(
+        self,
+        *,
+        origin: ResolvedLocation,
+        destination: ResolvedLocation,
+        mode: str,
+    ) -> AmapRouteResult:
+        """返回可用于断言工具轨迹的固定路线结果。"""
+
+        return AmapRouteResult(
+            origin=origin,
+            destination=destination,
+            mode=mode,
+            raw_route={
+                "paths": [
+                    {
+                        "distance": "296646",
+                        "duration": "11692",
+                    }
+                ]
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_route_execution_writes_standard_tool_call_trace() -> None:
+    node = create_execute_route_plan_node(_FakeAmapRouteToolset())  # type: ignore[arg-type]
+
+    result = await node(
+        {
+            "origin_text": "南京",
+            "destination_text": "上海",
+            "travel_mode": "driving",
+        }
+    )
+
+    assert result["tool_calls"] == [
+        {
+            "tool_name": "maps_direction_driving",
+            "status": "completed",
+            "input": {
+                "origin": "118.796624,32.059344",
+                "destination": "121.473667,31.230525",
+                "origin_text": "南京",
+                "destination_text": "上海",
+                "mode": "driving",
+            },
+            "output": {
+                "paths": [
+                    {
+                        "distance": "296646",
+                        "duration": "11692",
+                    }
+                ]
+            },
+            "metadata": {
+                "provider": "amap_mcp",
+                "agent_id": "route_planner_agent",
+            },
+        }
+    ]
 
 
 @pytest.mark.asyncio

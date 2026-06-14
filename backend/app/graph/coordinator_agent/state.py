@@ -24,3 +24,4 @@ class CoordinatorAgentState(BaseAgentState, total=False):
     resolved_origin: dict[str, Any] | None
     resolved_destination: dict[str, Any] | None
     route_plan: dict[str, Any] | None
+    tool_calls: list[dict[str, Any]]

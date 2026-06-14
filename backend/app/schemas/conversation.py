@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.schemas.chat import PendingHumanInput
 from app.schemas.message import MessageRead
+from app.schemas.tool_call import ToolCallRead
 
 
 class ConversationCreate(BaseModel):
@@ -45,11 +46,26 @@ class ConversationLatestRun(BaseModel):
     updated_at: datetime | None = None
 
 
+class ConversationRunTrace(BaseModel):
+    """用于恢复单轮消息执行轨迹的轻量运行快照。"""
+
+    id: str
+    agent_id: str | None = None
+    status: Literal["running", "interrupted", "cancelled", "completed", "failed", "created"] = (
+        "created"
+    )
+    assistant_message_id: str | None = None
+    assistant_content: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    tool_calls: list[ToolCallRead] = Field(default_factory=list)
+
+
 class ConversationDetail(ConversationRead):
     """包含已持久化消息与当前运行状态的会话详情负载。"""
 
     messages: list[MessageRead] = Field(default_factory=list)
     latest_run: ConversationLatestRun | None = None
+    run_traces: list[ConversationRunTrace] = Field(default_factory=list)
 
 
 class ConversationList(BaseModel):

@@ -27,6 +27,7 @@ from app.schemas.chat import (
     ChatStreamEvent,
     PendingHumanInput,
 )
+from app.schemas.tool_call import ToolCallPayload
 from app.services.agent_runtime_registry import AgentRuntimeRegistry, RuntimeControlRequest
 from app.services.chat_service import ChatService
 from app.services.graph_runner import GraphRunner
@@ -623,6 +624,34 @@ async def test_chat_service_persists_tool_calls_for_completed_runs() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tool_call_service_deduplicates_replayed_calls() -> None:
+    tool_call_repository = _FakeToolCallRepository()
+    service = ToolCallService(  # type: ignore[arg-type]
+        tool_call_repository=tool_call_repository,
+    )
+    payload = ToolCallPayload(
+        tool_name="search",
+        status="success",
+        input={"query": "agentic server"},
+        output={"hits": 3},
+        metadata={"tool_call_id": "call-1"},
+    )
+
+    await service.record_for_run(
+        "run-1",
+        [payload],
+        agent_id="chat_agent",
+    )
+    await service.record_for_run(
+        "run-1",
+        [payload],
+        agent_id="chat_agent",
+    )
+
+    assert len(tool_call_repository.items) == 1
+
+
+@pytest.mark.asyncio
 async def test_chat_service_records_audit_event_on_success() -> None:
     audit_writer = _FakeAuditWriter()
     service, _, _, _, _, _ = _build_service(audit_writer=audit_writer)
@@ -744,8 +773,21 @@ async def test_chat_service_stream_persists_interrupted_message_history() -> Non
         submit_label="继续规划路线",
         missing_fields=["origin", "travel_mode"],
     )
+    tool_call_repository = _FakeToolCallRepository()
     service, _, conversations, messages, agent_runs, _ = _build_service(
-        graph_runner=_FakeGraphRunner(pending_human_input=pending_human_input)
+        graph_runner=_FakeGraphRunner(
+            pending_human_input=pending_human_input,
+            tool_calls=[
+                {
+                    "tool_name": "search",
+                    "status": "success",
+                    "input": {"query": "广东"},
+                    "output": {"hits": 2},
+                    "metadata": {"tool_call_id": "call-interrupted"},
+                }
+            ],
+        ),
+        tool_call_repository=tool_call_repository,
     )
 
     events = [
@@ -772,6 +814,8 @@ async def test_chat_service_stream_persists_interrupted_message_history() -> Non
         "origin",
         "travel_mode",
     ]
+    assert len(tool_call_repository.items) == 1
+    assert tool_call_repository.items[0].output == {"hits": 2}
 
 
 @pytest.mark.asyncio

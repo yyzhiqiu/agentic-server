@@ -1,12 +1,12 @@
 import { MessageBubble } from "@/pages/chat/components/MessageBubble";
+import type { ExecutionActivity } from "@/pages/chat/chatTimeline";
 
 type Message = {
   id: string;
   role: string;
   content: string;
   pending?: boolean;
-  metadata?: Record<string, unknown>;
-  name?: string | null;
+  activities?: ExecutionActivity[];
 };
 
 type MessageListProps = {
@@ -22,8 +22,7 @@ export function MessageList({ messages }: MessageListProps) {
           content={message.content}
           role={message.role}
           pending={message.pending}
-          metadata={message.metadata}
-          name={message.name}
+          activities={message.activities}
         />
       ))}
     </div>

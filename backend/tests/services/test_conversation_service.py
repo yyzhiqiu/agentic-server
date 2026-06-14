@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -11,6 +11,7 @@ from app.audit.service import AuditService
 from app.common.exceptions import AppException
 from app.db.models.message import Message
 from app.schemas.conversation import ConversationCreate
+from app.schemas.tool_call import ToolCallRead
 from app.services.conversation_service import ConversationService
 
 
@@ -105,6 +106,66 @@ class _FakeMessageRepository:
         return items[offset : offset + limit]
 
 
+class _FakeAgentRun:
+    def __init__(
+        self,
+        *,
+        id: str,
+        conversation_id: str,
+        user_id: str,
+        agent_id: str,
+        output: dict,
+        created_at: datetime,
+    ) -> None:
+        self.id = id
+        self.conversation_id = conversation_id
+        self.user_id = user_id
+        self.agent_id = agent_id
+        self.status = "completed"
+        self.output = output
+        self.metadata_: dict = {}
+        self.created_at = created_at
+        self.updated_at = created_at
+
+
+class _FakeAgentRunRepository:
+    def __init__(self, items: list[_FakeAgentRun]) -> None:
+        self.items = items
+
+    async def list_by_user(
+        self,
+        user_id: str,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        status: str | None = None,
+        conversation_id: str | None = None,
+    ) -> list[_FakeAgentRun]:
+        items = [
+            item
+            for item in self.items
+            if item.user_id == user_id
+            and (conversation_id is None or item.conversation_id == conversation_id)
+            and (status is None or item.status == status)
+        ]
+        items.sort(key=lambda item: item.created_at, reverse=True)
+        return items[offset : offset + limit]
+
+
+class _FakeToolCallService:
+    def __init__(self, items_by_run: dict[str, list[ToolCallRead]]) -> None:
+        self.items_by_run = items_by_run
+
+    async def list_for_runs(
+        self,
+        agent_run_ids: list[str],
+    ) -> dict[str, list[ToolCallRead]]:
+        return {
+            run_id: list(self.items_by_run.get(run_id, []))
+            for run_id in agent_run_ids
+        }
+
+
 class _FakeAuditWriter:
     def __init__(self) -> None:
         self.events: list[AuditEvent] = []
@@ -183,3 +244,101 @@ async def test_conversation_service_raises_not_found_for_unknown_conversation() 
         await service.get("missing", "user-1")
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_conversation_service_returns_run_traces_for_each_assistant_message() -> None:
+    conversation_repository = _FakeConversationRepository()
+    message_repository = _FakeMessageRepository()
+    created = await conversation_repository.add(
+        _FakeConversation(
+            id="conversation-1",
+            user_id="user-1",
+            agent_id="coordinator_agent",
+            title="demo",
+            metadata_={},
+        )
+    )
+    await message_repository.add(
+        Message(
+            conversation_id=created.id,
+            role="assistant",
+            content="first answer",
+            metadata_={"message_id": "message-1"},
+        )
+    )
+    await message_repository.add(
+        Message(
+            conversation_id=created.id,
+            role="assistant",
+            content="second answer",
+            metadata_={"message_id": "message-2"},
+        )
+    )
+    now = datetime.now(timezone.utc)
+    runs = [
+        _FakeAgentRun(
+            id="run-1",
+            conversation_id=created.id,
+            user_id="user-1",
+            agent_id="chat_agent",
+            output={
+                "message": {
+                    "content": "first answer",
+                    "metadata": {"message_id": "message-1"},
+                },
+                "metadata": {"route_decision": {"confidence": 0.9}},
+            },
+            created_at=now,
+        ),
+        _FakeAgentRun(
+            id="run-2",
+            conversation_id=created.id,
+            user_id="user-1",
+            agent_id="chat_agent",
+            output={
+                "message": {
+                    "content": "second answer",
+                    "metadata": {"message_id": "message-2"},
+                },
+                "metadata": {},
+            },
+            created_at=now + timedelta(microseconds=1),
+        ),
+    ]
+    tool_call = ToolCallRead(
+        id="tool-1",
+        agent_run_id="run-1",
+        tool_name="search",
+        status="success",
+        input={"query": "hello"},
+        output={"hits": 1},
+        metadata={"tool_call_id": "call-1"},
+    )
+    duplicated_tool_call = tool_call.model_copy(
+        update={
+            "id": "tool-2",
+            "agent_run_id": "run-2",
+        }
+    )
+    service = ConversationService(
+        session=_FakeSession(),  # type: ignore[arg-type]
+        conversation_repository=conversation_repository,  # type: ignore[arg-type]
+        message_repository=message_repository,  # type: ignore[arg-type]
+        agent_run_repository=_FakeAgentRunRepository(runs),  # type: ignore[arg-type]
+        tool_call_service=_FakeToolCallService(
+            {
+                "run-1": [tool_call],
+                "run-2": [duplicated_tool_call],
+            }
+        ),  # type: ignore[arg-type]
+    )
+
+    detail = await service.get(created.id, "user-1")
+
+    assert detail.latest_run is not None
+    assert detail.latest_run.id == "run-2"
+    assert [trace.id for trace in detail.run_traces] == ["run-1", "run-2"]
+    assert detail.run_traces[0].assistant_message_id == "message-1"
+    assert detail.run_traces[0].tool_calls[0].output == {"hits": 1}
+    assert detail.run_traces[1].tool_calls == []

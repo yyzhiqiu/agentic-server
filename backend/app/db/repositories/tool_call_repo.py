@@ -24,3 +24,19 @@ class ToolCallRepository(BaseRepository[ToolCall]):
             .order_by(ToolCall.created_at.asc())
         )
         return list(result.scalars().all())
+
+    async def list_by_agent_runs(self, agent_run_ids: list[str]) -> list[ToolCall]:
+        """批量列出多条 Agent 运行记录下保存的工具调用。
+
+        本方法按创建时间正序返回结果，不负责事务提交。空 ID 列表不会访问数据库。
+        """
+
+        if not agent_run_ids:
+            return []
+
+        result = await self.session.execute(
+            select(ToolCall)
+            .where(ToolCall.agent_run_id.in_(agent_run_ids))
+            .order_by(ToolCall.created_at.asc())
+        )
+        return list(result.scalars().all())

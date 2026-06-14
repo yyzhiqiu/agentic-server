@@ -1187,12 +1187,17 @@ class ChatService:
             conversation.id,
             finalized_response.messages,
         )
-        if pending_messages:
-            async with transaction(self.session):
-                for message in pending_messages:
-                    await self.message_repository.add(
-                        self._message_to_model(conversation.id, message)
-                    )
+        async with transaction(self.session):
+            for message in pending_messages:
+                await self.message_repository.add(
+                    self._message_to_model(conversation.id, message)
+                )
+            if self.tool_call_service is not None:
+                await self.tool_call_service.record_for_run(
+                    agent_run.id,
+                    finalized_response.tool_calls,
+                    agent_id=response_agent_id,
+                )
         await self._mark_chat_run_interrupted(
             agent_run,
             agent_id=response_agent_id,

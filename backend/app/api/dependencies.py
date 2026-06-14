@@ -177,6 +177,9 @@ async def get_conversation_service(
         conversation_repository=ConversationRepository(session),
         message_repository=MessageRepository(session),
         agent_run_repository=AgentRunRepository(session),
+        tool_call_service=ToolCallService(
+            tool_call_repository=ToolCallRepository(session),
+        ),
         user_service=user_service,
         audit_service=AuditService(
             writer=DatabaseAuditWriter(session),

@@ -1,4 +1,8 @@
 import type { PendingHumanInput } from "@/features/chat/types";
+import type {
+  AgentRunStatus,
+  AgentRunToolCall,
+} from "@/features/agent-runs/types";
 
 export type ConversationMetadata = Record<string, unknown>;
 
@@ -27,6 +31,16 @@ export type ConversationLatestRun = {
   updatedAt: string | null;
 };
 
+export type ConversationRunTrace = {
+  id: string;
+  agentId: string | null;
+  status: AgentRunStatus;
+  assistantMessageId: string | null;
+  assistantContent: string | null;
+  metadata: ConversationMetadata;
+  toolCalls: AgentRunToolCall[];
+};
+
 export type ConversationListItem = {
   id: string;
   title: string | null;
@@ -44,4 +58,5 @@ export type ConversationListResponse = {
 export type ConversationDetail = ConversationListItem & {
   messages: ConversationMessage[];
   latestRun: ConversationLatestRun | null;
+  runTraces: ConversationRunTrace[];
 };

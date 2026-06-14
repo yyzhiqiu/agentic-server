@@ -6,7 +6,7 @@ import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command, GraphOutput
 
 from app.common.exceptions import GraphException, LLMException
@@ -132,6 +132,84 @@ class GraphRunner:
             raise last_error
         return astream_events(payload, version="v2")
 
+    @staticmethod
+    def _event_node(event: dict[str, Any]) -> str | None:
+        """读取 LangGraph 事件所属节点。"""
+
+        metadata = event.get("metadata")
+        if not isinstance(metadata, dict):
+            return None
+        node = metadata.get("langgraph_node")
+        return node if isinstance(node, str) and node else None
+
+    @staticmethod
+    def _event_run_id(event: dict[str, Any]) -> str | None:
+        """读取 LangChain 事件运行标识，用作流式消息边界。"""
+
+        run_id = event.get("run_id")
+        return str(run_id) if run_id is not None else None
+
+    @staticmethod
+    def _is_graph_step(event: dict[str, Any]) -> bool:
+        """判断链事件是否对应一个实际图节点，而非内部 Runnable。"""
+
+        tags = event.get("tags")
+        return isinstance(tags, list) and any(
+            isinstance(tag, str) and tag.startswith("graph:step:")
+            for tag in tags
+        )
+
+    @staticmethod
+    def _should_stream_model_event(event: dict[str, Any]) -> bool:
+        """过滤仅供内部决策使用的模型输出。
+
+        协调器的 ``route_decision`` 会输出结构化 JSON，它属于控制面数据，
+        不应作为聊天正文暴露给用户。其他模型调用均保留独立消息边界，
+        包括工具调用前的说明和工具完成后的最终答复。
+        """
+
+        return GraphRunner._event_node(event) != "route_decision"
+
+    @staticmethod
+    def _message_chunk_text(chunk: Any) -> str:
+        """从模型流式消息块中提取纯文本增量。"""
+
+        content = getattr(chunk, "content", None)
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return ""
+
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts)
+
+    @classmethod
+    def _stream_json_value(cls, value: Any) -> Any:
+        """把工具事件负载转换为 SSE 可序列化结构。"""
+
+        if isinstance(value, dict):
+            return {
+                str(key): cls._stream_json_value(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, tuple | list):
+            return [cls._stream_json_value(item) for item in value]
+        if isinstance(value, str | int | float | bool) or value is None:
+            return value
+
+        converted = message_like_to_chat_message(value)
+        if converted is not None:
+            return converted.model_dump()
+        return str(value)
+
     def _build_state(self, request: ChatRequest, *, user_id: str | None = None) -> dict[str, Any]:
         """把聊天请求规整为图执行状态。
 
@@ -181,12 +259,23 @@ class GraphRunner:
 
     @staticmethod
     def _json_object(value: Any) -> dict[str, Any]:
-        """将任意图执行值规整为类 JSON 对象。"""
+        """将任意图执行值规整为类 JSON 对象。
+
+        工具消息常把结构化结果序列化成 JSON 字符串。对象形式的 JSON 会在这里
+        还原，避免数据库出现 ``{"value": "{\"results\": ...}"}`` 的二次编码。
+        """
 
         if isinstance(value, dict):
             return dict(value)
         if value is None:
             return {}
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                return parsed
         return {"value": value}
 
     @classmethod
@@ -215,16 +304,27 @@ class GraphRunner:
 
         标准工具调用 graph 的执行轨迹通常保存在 ``messages`` 中，而不是顶层
         ``tool_calls`` 字段。这里会把模型发出的 ``tool_calls`` 与后续
-        ``ToolMessage`` 对齐，规整为统一的响应 Schema。
+        ``ToolMessage`` 对齐，规整为统一的响应 Schema。图结果可能携带完整 thread
+        历史，因此只读取最后一条用户消息之后的当前轮消息，避免旧工具调用被重复
+        归入新运行。
         """
 
+        last_human_index = next(
+            (
+                index
+                for index in range(len(raw_messages) - 1, -1, -1)
+                if isinstance(raw_messages[index], HumanMessage)
+            ),
+            0,
+        )
+        current_turn_messages = raw_messages[last_human_index:]
         tool_outputs_by_id: dict[str, ToolMessage] = {}
-        for message in raw_messages:
+        for message in current_turn_messages:
             if isinstance(message, ToolMessage) and isinstance(message.tool_call_id, str):
                 tool_outputs_by_id[message.tool_call_id] = message
 
         tool_calls: list[ToolCallPayload] = []
-        for message in raw_messages:
+        for message in current_turn_messages:
             if not isinstance(message, AIMessage):
                 continue
 
@@ -576,7 +676,8 @@ class GraphRunner:
             )
             return
 
-        last_content: str | None = None
+        last_streamed_content = ""
+        active_message_id: str | None = None
         final_result: dict[str, Any] | None = None
         latest_state: dict[str, Any] | None = None
         interrupt_payload: dict[str, Any] | None = None
@@ -608,6 +709,104 @@ class GraphRunner:
                 return
 
             async for event in iterator:
+                event_type = event.get("event")
+                event_node = self._event_node(event)
+
+                if (
+                    event_type == "on_chain_start"
+                    and event_node is not None
+                    and self._is_graph_step(event)
+                ):
+                    yield (
+                        "node_start",
+                        ChatStreamEvent(
+                            type="node_start",
+                            data={
+                                "node": event_node,
+                                "event_id": self._event_run_id(event),
+                            },
+                        ),
+                    )
+                    continue
+
+                if (
+                    event_type == "on_chain_end"
+                    and event_node is not None
+                    and self._is_graph_step(event)
+                ):
+                    yield (
+                        "node_end",
+                        ChatStreamEvent(
+                            type="node_end",
+                            data={
+                                "node": event_node,
+                                "event_id": self._event_run_id(event),
+                            },
+                        ),
+                    )
+                    continue
+
+                if event_type == "on_chat_model_start" and self._should_stream_model_event(event):
+                    active_message_id = self._event_run_id(event)
+                    last_streamed_content = ""
+                    continue
+
+                if event_type == "on_chat_model_stream" and self._should_stream_model_event(event):
+                    chunk = event.get("data", {}).get("chunk")
+                    delta = self._message_chunk_text(chunk)
+                    if not delta:
+                        continue
+                    message_id = self._event_run_id(event) or active_message_id
+                    last_streamed_content += delta
+                    yield (
+                        "message",
+                        ChatStreamEvent(
+                            type="message",
+                            content=delta,
+                            data={
+                                "delta": True,
+                                "message_id": message_id,
+                                "node": event_node,
+                            },
+                        ),
+                    )
+                    continue
+
+                if event_type == "on_tool_start":
+                    yield (
+                        "tool_start",
+                        ChatStreamEvent(
+                            type="tool_start",
+                            data={
+                                "tool_name": event.get("name"),
+                                "tool_call_id": self._event_run_id(event),
+                                "input": self._stream_json_value(
+                                    event.get("data", {}).get("input")
+                                ),
+                                "node": event_node,
+                            },
+                        ),
+                    )
+                    continue
+
+                if event_type == "on_tool_end":
+                    event_data = event.get("data", {})
+                    yield (
+                        "tool_end",
+                        ChatStreamEvent(
+                            type="tool_end",
+                            data={
+                                "tool_name": event.get("name"),
+                                "tool_call_id": self._event_run_id(event),
+                                "input": self._stream_json_value(event_data.get("input")),
+                                "output": self._stream_json_value(event_data.get("output")),
+                                "status": "completed",
+                                "node": event_node,
+                            },
+                        ),
+                    )
+                    continue
+
                 if event.get("event") == "on_chain_stream":
                     latest_state = self._extract_state_chunk(event) or latest_state
                     interrupts = self._extract_interrupt_chunk(event)
@@ -616,22 +815,7 @@ class GraphRunner:
                         pending_human_input = normalize_pending_human_input(interrupts[0])
                         if pending_human_input is not None:
                             interrupt_payload = pending_human_input.model_dump()
-                    if latest_state is None:
-                        if not interrupts:
-                            continue
-                    else:
-                        messages = self._messages_to_chat_messages(latest_state.get("messages", []))
-                        assistant_message = self._assistant_message(messages)
-                        if (
-                            assistant_message is not None
-                            and assistant_message.content
-                            and assistant_message.content != last_content
-                        ):
-                            last_content = assistant_message.content
-                            yield (
-                                "message",
-                                ChatStreamEvent(type="message", content=assistant_message.content),
-                            )
+                    continue
 
                 if event.get("event") == "on_chain_end" and event.get("name") == "LangGraph":
                     output = event.get("data", {}).get("output")
@@ -648,10 +832,19 @@ class GraphRunner:
                 interrupt_result,
             )
             response = self._response_from_result(response_result, request)
-            if response.message.content and response.message.content != last_content:
+            if response.message.content and response.message.content != last_streamed_content:
                 yield (
                     "message",
-                    ChatStreamEvent(type="message", content=response.message.content),
+                    ChatStreamEvent(
+                        type="message",
+                        content=response.message.content,
+                        data={
+                            "delta": False,
+                            "replace": True,
+                            "message_id": response.message.metadata.get("message_id"),
+                            "node": response.agent_id,
+                        },
+                    ),
                 )
             if interrupt_payload is not None:
                 yield (

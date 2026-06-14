@@ -25,8 +25,11 @@ from app.schemas.conversation import (
     ConversationLatestRun,
     ConversationList,
     ConversationRead,
+    ConversationRunTrace,
 )
 from app.schemas.message import MessageRead
+from app.schemas.tool_call import ToolCallRead
+from app.services.tool_call_service import ToolCallService
 from app.services.user_service import UserService
 
 
@@ -40,6 +43,7 @@ class ConversationService:
         conversation_repository: ConversationRepository,
         message_repository: MessageRepository | None = None,
         agent_run_repository: AgentRunRepository | None = None,
+        tool_call_service: ToolCallService | None = None,
         user_service: UserService | None = None,
         audit_service: AuditService | None = None,
     ) -> None:
@@ -47,6 +51,7 @@ class ConversationService:
         self.conversation_repository = conversation_repository
         self.message_repository = message_repository
         self.agent_run_repository = agent_run_repository
+        self.tool_call_service = tool_call_service
         self.user_service = user_service
         self.audit_service = audit_service or AuditService()
 
@@ -124,6 +129,46 @@ class ConversationService:
             return agent_id
         return None
 
+    @staticmethod
+    def _run_trace_to_read(
+        agent_run: AgentRun,
+        tool_calls: list[ToolCallRead],
+    ) -> ConversationRunTrace:
+        """将运行记录转换为会话历史可直接关联的执行轨迹。
+
+        关联优先使用最终 assistant 消息的协议 ``message_id``；旧数据缺少该字段时，
+        前端仍可使用最终回复文本做兼容匹配。
+        """
+
+        output = dict(agent_run.output or {})
+        raw_message = output.get("message")
+        message = raw_message if isinstance(raw_message, dict) else {}
+        raw_message_metadata = message.get("metadata")
+        message_metadata = (
+            raw_message_metadata if isinstance(raw_message_metadata, dict) else {}
+        )
+        assistant_message_id = message_metadata.get("message_id")
+        assistant_content = message.get("content")
+        raw_output_metadata = output.get("metadata")
+        output_metadata = (
+            dict(raw_output_metadata) if isinstance(raw_output_metadata, dict) else {}
+        )
+        return ConversationRunTrace(
+            id=agent_run.id,
+            agent_id=ConversationService._agent_id_from_run(agent_run),
+            status=agent_run.status,
+            assistant_message_id=(
+                assistant_message_id
+                if isinstance(assistant_message_id, str) and assistant_message_id
+                else None
+            ),
+            assistant_content=(
+                assistant_content if isinstance(assistant_content, str) else None
+            ),
+            metadata=output_metadata,
+            tool_calls=tool_calls,
+        )
+
     async def create(self, payload: ConversationCreate, user_id: str) -> ConversationRead:
         """为当前用户创建会话。"""
 
@@ -187,16 +232,46 @@ class ConversationService:
             messages = [self._message_to_read(item) for item in items]
 
         latest_run = None
+        run_traces: list[ConversationRunTrace] = []
         if self.agent_run_repository is not None:
-            latest_run = await self.agent_run_repository.get_latest_by_conversation_for_user(
-                conversation.id,
+            runs = await self.agent_run_repository.list_by_user(
                 user_id,
+                limit=200,
+                offset=0,
+                conversation_id=conversation.id,
             )
+            latest_run = runs[0] if runs else None
+            tool_calls_by_run: dict[str, list[ToolCallRead]] = {}
+            if self.tool_call_service is not None:
+                tool_calls_by_run = await self.tool_call_service.list_for_runs(
+                    [run.id for run in runs]
+                )
+            seen_tool_call_ids: set[str] = set()
+            for run in reversed(runs):
+                unique_tool_calls: list[ToolCallRead] = []
+                for tool_call in tool_calls_by_run.get(run.id, []):
+                    tool_call_id = tool_call.metadata.get("tool_call_id")
+                    if (
+                        isinstance(tool_call_id, str)
+                        and tool_call_id
+                        and tool_call_id in seen_tool_call_ids
+                    ):
+                        continue
+                    unique_tool_calls.append(tool_call)
+                    if isinstance(tool_call_id, str) and tool_call_id:
+                        seen_tool_call_ids.add(tool_call_id)
+                run_traces.append(
+                    self._run_trace_to_read(
+                        run,
+                        unique_tool_calls,
+                    )
+                )
 
         return ConversationDetail(
             **self._to_read(conversation).model_dump(),
             messages=messages,
             latest_run=self._latest_run_to_read(latest_run),
+            run_traces=run_traces,
         )
 
     async def delete(self, conversation_id: str, user_id: str) -> dict[str, str]:

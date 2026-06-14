@@ -74,6 +74,28 @@ export type ChatStreamMeta = {
   agentId: string | null;
 };
 
+export type ChatStreamMessage = {
+  messageId: string;
+  node: string | null;
+  content: string;
+  replace: boolean;
+};
+
+export type ChatStreamNodeEvent = {
+  eventId: string;
+  node: string;
+  status: "running" | "completed";
+};
+
+export type ChatStreamToolEvent = {
+  toolCallId: string;
+  toolName: string;
+  status: string;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+};
+
 export type ChatInterruptPayload = {
   pendingHumanInput: PendingHumanInput;
   conversationId: string | null;

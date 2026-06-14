@@ -12,6 +12,9 @@ import type {
   ChatResumeRequest,
   ChatResponse,
   ChatStreamMeta,
+  ChatStreamMessage,
+  ChatStreamNodeEvent,
+  ChatStreamToolEvent,
   ChatToolCall,
 } from "@/features/chat/types";
 
@@ -51,7 +54,16 @@ type BackendChatResponse = {
 };
 
 type BackendChatStreamEvent = {
-  type: "start" | "message" | "interrupt" | "error" | "done";
+  type:
+    | "start"
+    | "message"
+    | "node_start"
+    | "node_end"
+    | "tool_start"
+    | "tool_end"
+    | "interrupt"
+    | "error"
+    | "done";
   content?: string | null;
   data: Record<string, unknown>;
 };
@@ -138,7 +150,9 @@ function parseStreamEvent(raw: string): BackendChatStreamEvent {
 
 type StreamChatCallbacks = {
   onStart?: (meta: ChatStreamMeta) => void;
-  onMessage?: (content: string) => void;
+  onMessage?: (message: ChatStreamMessage) => void;
+  onNode?: (event: ChatStreamNodeEvent) => void;
+  onTool?: (event: ChatStreamToolEvent) => void;
   onInterrupt?: (payload: ChatInterruptPayload) => void;
   onDone?: (response: ChatResponse) => void;
   onError?: (error: ApiError) => void;
@@ -226,6 +240,8 @@ async function consumeStreamResponse(
     });
   }
 
+  const messageContent = new Map<string, string>();
+
   await readSseStream(response, (eventName, rawData) => {
     const event = parseStreamEvent(rawData);
 
@@ -235,7 +251,75 @@ async function consumeStreamResponse(
     }
 
     if (eventName === "message") {
-      callbacks.onMessage?.(event.content ?? "");
+      const rawMessageId = event.data.message_id;
+      const messageId =
+        typeof rawMessageId === "string" && rawMessageId.length > 0
+          ? rawMessageId
+          : "default";
+      const replace = event.data.replace === true;
+      const content = event.content ?? "";
+      const nextContent = replace
+        ? content
+        : `${messageContent.get(messageId) ?? ""}${content}`;
+      messageContent.set(messageId, nextContent);
+      callbacks.onMessage?.({
+        messageId,
+        node:
+          typeof event.data.node === "string" ? event.data.node : null,
+        content: nextContent,
+        replace,
+      });
+      return;
+    }
+
+    if (eventName === "node_start" || eventName === "node_end") {
+      const node = event.data.node;
+      if (typeof node === "string" && node.length > 0) {
+        callbacks.onNode?.({
+          eventId:
+            typeof event.data.event_id === "string"
+              ? event.data.event_id
+              : node,
+          node,
+          status: eventName === "node_start" ? "running" : "completed",
+        });
+      }
+      return;
+    }
+
+    if (eventName === "tool_start" || eventName === "tool_end") {
+      const toolName = event.data.tool_name;
+      if (typeof toolName === "string" && toolName.length > 0) {
+        callbacks.onTool?.({
+          toolCallId:
+            typeof event.data.tool_call_id === "string"
+              ? event.data.tool_call_id
+              : `${eventName}-${toolName}`,
+          toolName,
+          status:
+            eventName === "tool_start"
+              ? "running"
+              : typeof event.data.status === "string"
+                ? event.data.status
+                : "completed",
+          input:
+            event.data.input &&
+            typeof event.data.input === "object" &&
+            !Array.isArray(event.data.input)
+              ? (event.data.input as Record<string, unknown>)
+              : {},
+          output:
+            event.data.output &&
+            typeof event.data.output === "object" &&
+            !Array.isArray(event.data.output)
+              ? (event.data.output as Record<string, unknown>)
+              : {},
+          metadata: {
+            node:
+              typeof event.data.node === "string" ? event.data.node : null,
+          },
+        });
+      }
       return;
     }
 

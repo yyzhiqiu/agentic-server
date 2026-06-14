@@ -8,6 +8,7 @@ import type {
   ConversationListResponse,
   ConversationListItem,
   ConversationMessage,
+  ConversationRunTrace,
 } from "@/features/conversations/types";
 
 type BackendConversationRecord = {
@@ -36,6 +37,7 @@ type BackendConversationListResponse = {
 type BackendConversationDetail = BackendConversationRecord & {
   messages: BackendConversationMessage[];
   latest_run?: BackendConversationLatestRun | null;
+  run_traces?: BackendConversationRunTrace[];
 };
 
 type BackendConversationLatestRun = {
@@ -46,6 +48,27 @@ type BackendConversationLatestRun = {
   resume_available: boolean;
   pending_human_input: unknown;
   updated_at: string | null;
+};
+
+type BackendConversationRunTrace = {
+  id: string;
+  agent_id: string | null;
+  status: ConversationRunTrace["status"];
+  assistant_message_id: string | null;
+  assistant_content: string | null;
+  metadata: Record<string, unknown>;
+  tool_calls: Array<{
+    id: string;
+    agent_run_id: string | null;
+    agent_id?: string | null;
+    tool_name: string;
+    status: string;
+    input: Record<string, unknown>;
+    output: Record<string, unknown>;
+    metadata: Record<string, unknown>;
+    created_at: string | null;
+    updated_at: string | null;
+  }>;
 };
 
 function readAgentId(record: BackendConversationRecord) {
@@ -102,6 +125,31 @@ function mapConversationLatestRun(
   };
 }
 
+function mapConversationRunTrace(
+  record: BackendConversationRunTrace,
+): ConversationRunTrace {
+  return {
+    id: record.id,
+    agentId: record.agent_id,
+    status: record.status,
+    assistantMessageId: record.assistant_message_id,
+    assistantContent: record.assistant_content,
+    metadata: record.metadata,
+    toolCalls: record.tool_calls.map((toolCall) => ({
+      id: toolCall.id,
+      agentRunId: toolCall.agent_run_id,
+      agentId: toolCall.agent_id ?? null,
+      toolName: toolCall.tool_name,
+      status: toolCall.status,
+      input: toolCall.input,
+      output: toolCall.output,
+      metadata: toolCall.metadata,
+      createdAt: toolCall.created_at,
+      updatedAt: toolCall.updated_at,
+    })),
+  };
+}
+
 export function getConversations() {
   return apiRequest<BackendConversationListResponse>(
     API_ENDPOINTS.conversations,
@@ -118,5 +166,6 @@ export function getConversationDetail(conversationId: string) {
     ...mapConversationListItem(data),
     messages: data.messages.map(mapConversationMessage),
     latestRun: mapConversationLatestRun(data.latest_run),
+    runTraces: (data.run_traces ?? []).map(mapConversationRunTrace),
   }));
 }

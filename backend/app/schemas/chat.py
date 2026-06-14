@@ -85,6 +85,16 @@ class ChatResumeRequest(BaseModel):
 class ChatStreamEvent(BaseModel):
     """流式聊天事件。"""
 
-    type: Literal["start", "message", "interrupt", "error", "done"] = "message"
+    type: Literal[
+        "start",
+        "message",
+        "node_start",
+        "node_end",
+        "tool_start",
+        "tool_end",
+        "interrupt",
+        "error",
+        "done",
+    ] = "message"
     content: str | None = None
     data: dict[str, Any] = Field(default_factory=dict)

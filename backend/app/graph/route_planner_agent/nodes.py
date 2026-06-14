@@ -399,6 +399,7 @@ def create_execute_route_plan_node(amap_route_toolset: AmapRouteToolset | None):
         Writes:
             resolved_origin / resolved_destination: 规范化后的地点信息。
             route_plan: 原始路线结果及出行方式。
+            tool_calls: 可供响应、持久化和前端展示的标准工具调用轨迹。
             missing_fields / validation_errors: 当地点无法解析时，引导图重新进入补参。
 
         Side Effects:
@@ -472,6 +473,11 @@ def create_execute_route_plan_node(amap_route_toolset: AmapRouteToolset | None):
             destination=destination,
             mode=travel_mode,
         )
+        route_tool_names = {
+            "driving": "maps_direction_driving",
+            "walking": "maps_direction_walking",
+            "transit": "maps_direction_transit_integrated",
+        }
         return {
             "resolved_origin": _location_to_dict(route_result.origin),
             "resolved_destination": _location_to_dict(route_result.destination),
@@ -479,6 +485,27 @@ def create_execute_route_plan_node(amap_route_toolset: AmapRouteToolset | None):
                 "mode": route_result.mode,
                 "raw_route": route_result.raw_route,
             },
+            "tool_calls": [
+                {
+                    "tool_name": route_tool_names.get(
+                        route_result.mode,
+                        "maps_direction",
+                    ),
+                    "status": "completed",
+                    "input": {
+                        "origin": origin.location,
+                        "destination": destination.location,
+                        "origin_text": origin_text,
+                        "destination_text": destination_text,
+                        "mode": route_result.mode,
+                    },
+                    "output": route_result.raw_route,
+                    "metadata": {
+                        "provider": "amap_mcp",
+                        "agent_id": "route_planner_agent",
+                    },
+                }
+            ],
             "missing_fields": [],
             "validation_errors": {},
         }

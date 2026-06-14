@@ -124,6 +124,80 @@ class _GraphWithMessageToolCalls:
         }
 
 
+class _GraphWithJsonToolOutput:
+    async def ainvoke(self, state, **_: object):
+        return {
+            "conversation_id": state["conversation_id"],
+            "messages": [
+                *state["messages"],
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "search",
+                            "args": {"query": "OpenAI"},
+                            "id": "call_json",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                ToolMessage(
+                    content='{"query":"OpenAI","results":[{"title":"OpenAI"}]}',
+                    tool_call_id="call_json",
+                    status="success",
+                ),
+                AIMessage(content="已找到 OpenAI"),
+            ],
+            "metadata": {"model": "mock"},
+        }
+
+
+class _GraphWithHistoricalToolCalls:
+    async def ainvoke(self, state, **_: object):
+        return {
+            "conversation_id": state["conversation_id"],
+            "messages": [
+                HumanMessage(content="old question"),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "search",
+                            "args": {"query": "old"},
+                            "id": "call_old",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                ToolMessage(
+                    content='{"results":["old"]}',
+                    tool_call_id="call_old",
+                    status="success",
+                ),
+                AIMessage(content="old answer"),
+                HumanMessage(content="new question"),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "get_time",
+                            "args": {},
+                            "id": "call_new",
+                            "type": "tool_call",
+                        }
+                    ],
+                ),
+                ToolMessage(
+                    content="2026-06-14 23:33:14",
+                    tool_call_id="call_new",
+                    status="success",
+                ),
+                AIMessage(content="new answer"),
+            ],
+            "metadata": {"model": "mock"},
+        }
+
+
 class _GraphStreamingInterrupt:
     async def aget_state(self, config, **_: object):
         _ = config
@@ -208,6 +282,112 @@ class _GraphStreamingInterrupt:
         }
 
 
+class _GraphStreamingModelAndToolEvents:
+    async def astream_events(self, state, **_: object):
+        _ = state
+        yield {
+            "event": "on_chat_model_stream",
+            "run_id": "route-model",
+            "metadata": {"langgraph_node": "route_decision"},
+            "data": {"chunk": AIMessage(content='{"intent":"general_chat"}')},
+        }
+        yield {
+            "event": "on_chain_start",
+            "run_id": "model-node",
+            "tags": ["graph:step:2"],
+            "metadata": {"langgraph_node": "model"},
+            "data": {},
+        }
+        yield {
+            "event": "on_chat_model_start",
+            "run_id": "answer-model",
+            "metadata": {"langgraph_node": "model"},
+            "data": {},
+        }
+        for content in ("你", "好"):
+            yield {
+                "event": "on_chat_model_stream",
+                "run_id": "answer-model",
+                "metadata": {"langgraph_node": "model"},
+                "data": {"chunk": AIMessage(content=content)},
+            }
+        yield {
+            "event": "on_tool_start",
+            "name": "get_time",
+            "run_id": "tool-run",
+            "metadata": {"langgraph_node": "tools"},
+            "data": {"input": {}},
+        }
+        yield {
+            "event": "on_tool_end",
+            "name": "get_time",
+            "run_id": "tool-run",
+            "metadata": {"langgraph_node": "tools"},
+            "data": {
+                "input": {},
+                "output": ToolMessage(
+                    content="2026-06-14 23:00:00",
+                    name="get_time",
+                    tool_call_id="call-1",
+                ),
+            },
+        }
+        yield {
+            "event": "on_chain_end",
+            "run_id": "model-node",
+            "tags": ["graph:step:2"],
+            "metadata": {"langgraph_node": "model"},
+            "data": {},
+        }
+        yield {
+            "event": "on_chain_end",
+            "name": "LangGraph",
+            "run_id": "graph-run",
+            "tags": [],
+            "metadata": {},
+            "data": {
+                "output": {
+                    "messages": [
+                        HumanMessage(content="hello"),
+                        AIMessage(content="你好"),
+                    ],
+                    "metadata": {"agent_id": "chat_agent"},
+                }
+            },
+        }
+
+
+@pytest.mark.asyncio
+async def test_graph_runner_streams_token_node_and_tool_events() -> None:
+    runner = GraphRunner(
+        _GraphStreamingModelAndToolEvents(),
+        agent_id="coordinator_agent",
+    )
+    request = ChatRequest(messages=[ChatMessage(role="user", content="hello")])
+
+    events = [event async for event in runner.stream_chat_events(request)]
+
+    message_events = [
+        payload for event_name, payload in events if event_name == "message"
+    ]
+    assert [event.content for event in message_events] == ["你", "好"]
+    assert all("intent" not in (event.content or "") for event in message_events)
+
+    node_events = [
+        (event_name, payload.data["node"])
+        for event_name, payload in events
+        if event_name in {"node_start", "node_end"}
+    ]
+    assert node_events == [("node_start", "model"), ("node_end", "model")]
+
+    tool_start = next(payload for name, payload in events if name == "tool_start")
+    tool_end = next(payload for name, payload in events if name == "tool_end")
+    assert tool_start.data["tool_name"] == "get_time"
+    assert tool_end.data["status"] == "completed"
+    assert tool_end.data["output"]["role"] == "tool"
+    assert tool_end.data["output"]["content"] == "2026-06-14 23:00:00"
+
+
 @pytest.mark.asyncio
 async def test_graph_runner_returns_mock_response() -> None:
     runner = GraphRunner(build_chat_agent(llm=None), agent_id="chat_agent")
@@ -254,6 +434,37 @@ async def test_graph_runner_extracts_tool_calls_from_message_chain() -> None:
     assert response.tool_calls[0].input == {"query": "now"}
     assert response.tool_calls[0].output == {"value": "2026-06-08 00:00:00"}
     assert response.tool_calls[0].metadata["tool_call_id"] == "call_1"
+
+
+@pytest.mark.asyncio
+async def test_graph_runner_parses_json_object_tool_output() -> None:
+    runner = GraphRunner(_GraphWithJsonToolOutput())
+    request = ChatRequest(
+        conversation_id="conversation-1",
+        messages=[ChatMessage(role="user", content="search")],
+    )
+
+    response = await runner.run_chat(request)
+
+    assert response.tool_calls[0].output == {
+        "query": "OpenAI",
+        "results": [{"title": "OpenAI"}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_graph_runner_only_extracts_current_turn_tool_calls() -> None:
+    runner = GraphRunner(_GraphWithHistoricalToolCalls())
+    request = ChatRequest(
+        conversation_id="conversation-1",
+        messages=[ChatMessage(role="user", content="new question")],
+    )
+
+    response = await runner.run_chat(request)
+
+    assert len(response.tool_calls) == 1
+    assert response.tool_calls[0].tool_name == "get_time"
+    assert response.tool_calls[0].metadata["tool_call_id"] == "call_new"
 
 
 @pytest.mark.asyncio
